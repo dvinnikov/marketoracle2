@@ -6,7 +6,9 @@ import { ArrowUp, ArrowDown } from 'lucide-react';
 
 export interface SignalLog {
   id: string;
+  symbol: string;
   time: string;
+  timestamp: number;
   strategy: string;
   side: 'BUY' | 'SELL';
   entry: number;
@@ -50,13 +52,12 @@ export function SignalLogs({ logs }: SignalLogsProps) {
     <Card className="h-full flex flex-col">
       <CardHeader>
         <CardTitle>Signal Logs</CardTitle>
-        <CardDescription>
-          <div className="flex items-center gap-4 mt-2">
-            <span>Total P&L: <span className={totalPnl >= 0 ? 'text-green-500' : 'text-red-500'}>${totalPnl.toFixed(2)}</span></span>
-            <span>Win Rate: {winRate}%</span>
-            <span>Signals: {logs.length}</span>
-          </div>
-        </CardDescription>
+        <CardDescription>Live trade signal history and performance metrics.</CardDescription>
+        <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+          <span>Total P&L: <span className={totalPnl >= 0 ? 'text-green-500' : 'text-red-500'}>${totalPnl.toFixed(2)}</span></span>
+          <span>Win Rate: {winRate}%</span>
+          <span>Signals: {logs.length}</span>
+        </div>
       </CardHeader>
       <CardContent className="flex-1 overflow-hidden p-0">
         <ScrollArea className="h-full">
