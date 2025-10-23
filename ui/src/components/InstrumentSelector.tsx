@@ -10,6 +10,8 @@ export interface InstrumentOption {
 interface InstrumentSelectorProps {
   value: string;
   onChange: (value: string) => void;
+  /** Accept both names to be compatible with callers */
+  options?: InstrumentOption[];
   instruments?: InstrumentOption[];
   disabled?: boolean;
 }
@@ -25,18 +27,34 @@ const FALLBACK_INSTRUMENTS: InstrumentOption[] = [
   { value: 'EURJPY', label: 'EUR/JPY', name: 'Euro / Japanese Yen' },
 ];
 
-export function InstrumentSelector({ value, onChange, instruments = FALLBACK_INSTRUMENTS, disabled }: InstrumentSelectorProps) {
-  const options = instruments.length > 0 ? instruments : FALLBACK_INSTRUMENTS;
+export function InstrumentSelector({
+  value,
+  onChange,
+  options,
+  instruments,
+  disabled,
+}: InstrumentSelectorProps) {
+  const list = (options ?? instruments ?? FALLBACK_INSTRUMENTS);
+  const selected = list.find((i) => i.value === value);
 
   return (
     <div className="flex items-center gap-2">
       <TrendingUp className="w-5 h-5 text-muted-foreground" />
-      <Select value={value} onValueChange={onChange} disabled={disabled || options.length === 0}>
+      <Select value={value} onValueChange={onChange} disabled={disabled || list.length === 0}>
         <SelectTrigger className="w-[280px]">
-          <SelectValue />
+          <SelectValue placeholder="Select instrument">
+            {selected ? (
+              <span className="flex flex-col items-start">
+                <span>{selected.label}</span>
+                {selected.name && (
+                  <span className="text-xs text-muted-foreground">{selected.name}</span>
+                )}
+              </span>
+            ) : null}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {options.map((instrument) => (
+          {list.map((instrument: InstrumentOption) => (
             <SelectItem key={instrument.value} value={instrument.value}>
               <div className="flex flex-col items-start">
                 <span>{instrument.label}</span>

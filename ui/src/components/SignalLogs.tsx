@@ -24,7 +24,7 @@ interface SignalLogsProps {
 }
 
 export function SignalLogs({ logs }: SignalLogsProps) {
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: SignalLog['status']) => {
     switch (status) {
       case 'ACTIVE':
         return 'default';
@@ -37,15 +37,15 @@ export function SignalLogs({ logs }: SignalLogsProps) {
     }
   };
 
-  const getResultColor = (result?: string) => {
+  const getResultColor = (result?: SignalLog['result']) => {
     if (result === 'WIN') return 'default';
     if (result === 'LOSS') return 'destructive';
     return 'secondary';
   };
 
-  const totalPnl = logs.reduce((sum, log) => sum + (log.pnl || 0), 0);
-  const winCount = logs.filter(log => log.result === 'WIN').length;
-  const lossCount = logs.filter(log => log.result === 'LOSS').length;
+  const totalPnl = logs.reduce((sum: number, log: SignalLog) => sum + (log.pnl ?? 0), 0);
+  const winCount = logs.filter((log: SignalLog) => log.result === 'WIN').length;
+  const lossCount = logs.filter((log: SignalLog) => log.result === 'LOSS').length;
   const winRate = logs.length > 0 ? ((winCount / (winCount + lossCount)) * 100).toFixed(1) : '0';
 
   return (
@@ -83,7 +83,7 @@ export function SignalLogs({ logs }: SignalLogsProps) {
                   </TableCell>
                 </TableRow>
               ) : (
-                logs.map((log) => (
+                logs.map((log: SignalLog) => (
                   <TableRow key={log.id}>
                     <TableCell className="text-muted-foreground">{log.time}</TableCell>
                     <TableCell>{log.strategy}</TableCell>

@@ -7,7 +7,7 @@ import { InstrumentSelector, InstrumentOption } from './components/InstrumentSel
 import { PredictionPanel } from './components/PredictionPanel';
 import { Button } from './components/ui/button';
 import { Toaster } from './components/ui/sonner';
-import { toast } from 'sonner@2.0.3';
+import { toast as _toast } from 'sonner';
 import { apiGet, apiPost, WS_BASE_URL } from './lib/api';
 
 type BackendSignal = {
@@ -51,6 +51,15 @@ type PredictionResponse = {
   confidence: number;
   target?: number | null;
 };
+
+
+const toast: {
+  (message: string, options?: any): void;
+  success: (message: string, options?: any) => void;
+  error: (message: string, options?: any) => void;
+  info: (message: string, options?: any) => void;
+} = _toast as any;
+
 
 const STRATEGY_WIN_RATE_FALLBACK: Record<string, number> = {
   'RSI Crossover': 68,
@@ -141,8 +150,8 @@ export default function App() {
   const [isLoadingInstruments, setIsLoadingInstruments] = useState<boolean>(false);
 
   const toggleStrategy = useCallback((id: string) => {
-    setStrategies((prev) =>
-      prev.map((strategy) =>
+    setStrategies((prevStrategies: Strategy[]) =>
+      prevStrategies.map((strategy: Strategy) =>
         strategy.id === id ? { ...strategy, enabled: !strategy.enabled } : strategy
       )
     );
@@ -162,11 +171,11 @@ export default function App() {
           name: FALLBACK_INSTRUMENT_DETAILS[symbol]?.name,
         }));
         setInstrumentOptions(options);
-        setSelectedInstrument((prev) => {
-          if (options.some((option) => option.value === prev)) {
-            return prev;
+        setSelectedInstrument((previousInstrument: string) => {
+          if (options.some((option: InstrumentOption) => option.value === previousInstrument)) {
+            return previousInstrument;
           }
-          return options[0]?.value ?? prev ?? 'EURUSD';
+          return options[0]?.value ?? previousInstrument ?? 'EURUSD';
         });
       } catch (error) {
         if (!cancelled) {
@@ -177,13 +186,15 @@ export default function App() {
             label: meta.label,
             name: meta.name,
           }));
-          setInstrumentOptions((prev) => (prev.length ? prev : fallbackOptions));
-          setSelectedInstrument((prev) => {
+          setInstrumentOptions((previousOptions: InstrumentOption[]) =>
+            previousOptions.length ? previousOptions : fallbackOptions
+          );
+          setSelectedInstrument((previousInstrument: string) => {
             const options = fallbackOptions.length ? fallbackOptions : instrumentOptions;
-            if (options.some((option) => option.value === prev)) {
-              return prev;
+            if (options.some((option: InstrumentOption) => option.value === previousInstrument)) {
+              return previousInstrument;
             }
-            return options[0]?.value ?? prev ?? 'EURUSD';
+            return options[0]?.value ?? previousInstrument ?? 'EURUSD';
           });
         }
       } finally {
@@ -283,14 +294,14 @@ export default function App() {
             low: bar.l,
             close: bar.c,
           };
-          setCandles((prev) => {
-            const idx = prev.findIndex((item) => item.timestamp === candle.timestamp);
+          setCandles((previousCandles: Candle[]) => {
+            const idx = previousCandles.findIndex((item: Candle) => item.timestamp === candle.timestamp);
             if (idx >= 0) {
-              const next = [...prev];
+              const next = [...previousCandles];
               next[idx] = candle;
               return next;
             }
-            return [...prev.slice(-199), candle];
+            return [...previousCandles.slice(-199), candle];
           });
           setCurrentPrice(candle.close);
         } catch (error) {
@@ -360,15 +371,15 @@ export default function App() {
           const payload = JSON.parse(event.data) as BackendSignal;
           const mapped = mapSignal(payload);
           let isNewSignal = false;
-          setSignalLogs((prev) => {
-            const idx = prev.findIndex((signal) => signal.id === mapped.id);
+          setSignalLogs((previousLogs: SignalLog[]) => {
+            const idx = previousLogs.findIndex((signal: SignalLog) => signal.id === mapped.id);
             if (idx >= 0) {
-              const next = [...prev];
+              const next = [...previousLogs];
               next[idx] = mapped;
               return next;
             }
             isNewSignal = true;
-            return [mapped, ...prev].slice(0, 200);
+            return [mapped, ...previousLogs].slice(0, 200);
           });
           if (isNewSignal && mapped.symbol === selectedInstrument) {
             toast.success(`New ${mapped.side} Signal`, {
@@ -509,7 +520,9 @@ export default function App() {
       return;
     }
 
-    const activeStrategies = strategies.filter((strategy) => strategy.enabled).map((strategy) => strategy.name);
+    const activeStrategies = strategies
+      .filter((strategy: Strategy) => strategy.enabled)
+      .map((strategy: Strategy) => strategy.name);
     if (activeStrategies.length === 0) {
       toast.info('Enable at least one strategy to start the runner');
       return;
@@ -542,7 +555,7 @@ export default function App() {
   }, [isRunnerBusy, isRunning, runnerId, selectedInstrument, strategies]);
 
   const instrumentSignals = useMemo(
-    () => signalLogs.filter((signal) => signal.symbol === selectedInstrument),
+    () => signalLogs.filter((signal: SignalLog) => signal.symbol === selectedInstrument),
     [signalLogs, selectedInstrument]
   );
 

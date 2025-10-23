@@ -1,7 +1,7 @@
-import { Checkbox } from './ui/checkbox';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
-import { Badge } from './ui/badge';
-import { ScrollArea } from './ui/scroll-area';
+import { Checkbox } from "./ui/checkbox";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Badge } from "./ui/badge";
+import { ScrollArea } from "./ui/scroll-area";
 
 export interface Strategy {
   id: string;
@@ -13,11 +13,15 @@ export interface Strategy {
 
 interface StrategySelectorProps {
   strategies: Strategy[];
-  onToggleStrategy: (id: string) => void;
+  /** Support both prop names to match callers */
+  onToggleStrategy?: (id: string) => void;
+  onToggle?: (id: string) => void;
 }
 
-export function StrategySelector({ strategies, onToggleStrategy }: StrategySelectorProps) {
-  const activeCount = strategies.filter(s => s.enabled).length;
+export function StrategySelector({ strategies, onToggleStrategy, onToggle }: StrategySelectorProps) {
+  // Normalize handler (prefer onToggle, since App.tsx uses it)
+  const handleToggle = onToggle ?? onToggleStrategy ?? (() => {});
+  const activeCount = strategies.filter((s) => s.enabled).length;
 
   return (
     <Card className="h-full flex flex-col">
@@ -34,17 +38,17 @@ export function StrategySelector({ strategies, onToggleStrategy }: StrategySelec
               <div
                 key={strategy.id}
                 className="flex items-start space-x-3 p-3 rounded-lg border border-border bg-card hover:bg-accent/50 transition-colors cursor-pointer"
-                onClick={() => onToggleStrategy(strategy.id)}
+                onClick={() => handleToggle(strategy.id)}
               >
                 <Checkbox
                   checked={strategy.enabled}
-                  onCheckedChange={() => onToggleStrategy(strategy.id)}
+                  onCheckedChange={() => handleToggle(strategy.id)}
                   className="mt-1"
                 />
                 <div className="flex-1 space-y-1">
                   <div className="flex items-center justify-between">
                     <p className="text-foreground">{strategy.name}</p>
-                    <Badge variant={strategy.winRate >= 60 ? 'default' : 'secondary'}>
+                    <Badge variant={strategy.winRate >= 60 ? "default" : "secondary"}>
                       {strategy.winRate}% WR
                     </Badge>
                   </div>
