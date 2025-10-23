@@ -2,7 +2,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple
-import time
 import math
 
 # Expect OHLC arrays or list[dict] bars from your data layer:
@@ -112,16 +111,23 @@ def adx(h: List[float], l: List[float], c: List[float], period: int) -> List[flo
         plus_dm[i] = up if (up > dn and up > 0) else 0.0
         minus_dm[i] = dn if (dn > up and dn > 0) else 0.0
     tr = true_range(h, l, c)
-    atr = ema(tr, period)
+    atr_vals = ema(tr, period)
     pdi = [math.nan] * len(c)
     mdi = [math.nan] * len(c)
     dx = [math.nan] * len(c)
+    # Precompute EMA of DM to avoid recompute in loop
+    ema_plus = ema(plus_dm, period)
+    ema_minus = ema(minus_dm, period)
     for i in range(len(c)):
-        if math.isnan(atr[i]) or atr[i] == 0:
+        if math.isnan(atr_vals[i]) or atr_vals[i] == 0:
             continue
-        pdi[i] = 100.0 * ema(plus_dm, period)[i] / atr[i]
-        mdi[i] = 100.0 * ema(minus_dm, period)[i] / atr[i]
-        if pdi[i] is None or mdi[i] is None or math.isnan(pdi[i]) or math.isnan(mdi[i]) or (pdi[i] + mdi[i]) == 0:
+        pdi[i] = 100.0 * ema_plus[i] / atr_vals[i]
+        mdi[i] = 100.0 * ema_minus[i] / atr_vals[i]
+        if (
+            pdi[i] is None or mdi[i] is None or
+            math.isnan(pdi[i]) or math.isnan(mdi[i]) or
+            (pdi[i] + mdi[i]) == 0
+        ):
             continue
         dx[i] = 100.0 * abs(pdi[i] - mdi[i]) / (pdi[i] + mdi[i])
     return ema([0 if math.isnan(x) else x for x in dx], period)
@@ -253,7 +259,6 @@ def strat_support_resistance(symbol: str, bars: List[dict], params: Dict) -> Opt
 
 
 # ---------- NEW strategies (6) ----------
-
 def strat_supertrend(symbol: str, bars: List[dict], params: Dict) -> Optional[Signal]:
     atr_len = int(params.get("atr_len", 10))
     mult = float(params.get("mult", 3.0))
@@ -318,7 +323,7 @@ def strat_adx_ema_pullback(symbol: str, bars: List[dict], params: Dict) -> Optio
     c = [b["c"] for b in bars]; h = [b["h"] for b in bars]; l = [b["l"] for b in bars]
     e = ema(c, ema_len); a = adx(h, l, c, adx_len)
     i = len(c)-1
-    if i < 2 or math.isnan(e[i]) or math.isnan(a[i])): return None
+    if i < 2 or math.isnan(e[i]) or math.isnan(a[i]): return None
     # strong trend filter + pullback to EMA
     if a[i] >= adx_thr:
         if c[i-1] < e[i-1] and c[i] > e[i]:  # pullback end in uptrend
@@ -364,6 +369,84 @@ def strat_stoch_rsi_reversal(symbol: str, bars: List[dict], params: Dict) -> Opt
     return None
 
 
+# ---------- Liquidity Sweep Reversal (NO indicators) ----------
+def _is_swing_high(bars: List[dict], i: int, look: int) -> bool:
+    if i - look < 0 or i + look >= len(bars):
+        return False
+    hi = bars[i]["h"]
+    for k in range(1, look + 1):
+        if hi < bars[i - k]["h"] or hi < bars[i + k]["h"]:
+            return False
+    return True
+
+def _is_swing_low(bars: List[dict], i: int, look: int) -> bool:
+    if i - look < 0 or i + look >= len(bars):
+        return False
+    lo = bars[i]["l"]
+    for k in range(1, look + 1):
+        if lo > bars[i - k]["l"] or lo > bars[i + k]["l"]:
+            return False
+    return True
+
+def _find_prev_swing(bars: List[dict], i: int, look: int, kind: str) -> Optional[int]:
+    k = i - 1
+    while k >= 0:
+        if kind == "high" and _is_swing_high(bars, k, look):
+            return k
+        if kind == "low" and _is_swing_low(bars, k, look):
+            return k
+        k -= 1
+    return None
+
+def strat_liquidity_sweep_reversal(symbol: str, bars: List[dict], params: Dict) -> Optional[Signal]:
+    """
+    Pure price-action:
+      - Find previous swing high/low.
+      - If current bar sweeps that level (makes a new extreme) but CLOSES back inside, fade the move.
+      - Entry at close, stop beyond sweep extreme (+/- buffer), target by RR.
+    """
+    if not bars or len(bars) < int(params.get("swing_look", 2)) + 3:
+        return None
+
+    swing_look = int(params.get("swing_look", 2))
+    sweep_frac = float(params.get("sweep_frac", 0.20))  # fraction of body to qualify sweep
+    buffer = float(params.get("buffer", 0.00010))
+    rr = float(params.get("rr", 1.5))
+
+    i = len(bars) - 1
+    bar = bars[i]
+    body = abs(bar["c"] - bar["o"])
+    min_sweep = max(buffer, body * sweep_frac)
+
+    # Bearish sweep: take liquidity above previous swing high, close back below that swing
+    prev_hi_idx = _find_prev_swing(bars, i, swing_look, "high")
+    if prev_hi_idx is not None and prev_hi_idx < i:
+        prev_hi = bars[prev_hi_idx]["h"]
+        swept_up = (bar["h"] > prev_hi) and (bar["c"] < prev_hi)
+        if swept_up and (bar["h"] - prev_hi) >= min_sweep:
+            entry = bar["c"]
+            stop = bar["h"] + buffer
+            risk = abs(entry - stop)
+            if risk > 0:
+                target = entry - rr * risk
+                return Signal(bar["t"], symbol, "Liquidity Sweep Reversal", "SELL", entry, stop, target)
+
+    # Bullish sweep: take liquidity below previous swing low, close back above that swing
+    prev_lo_idx = _find_prev_swing(bars, i, swing_look, "low")
+    if prev_lo_idx is not None and prev_lo_idx < i:
+        prev_lo = bars[prev_lo_idx]["l"]
+        swept_dn = (bar["l"] < prev_lo) and (bar["c"] > prev_lo)
+        if swept_dn and (prev_lo - bar["l"]) >= min_sweep:
+            entry = bar["c"]
+            stop = bar["l"] - buffer
+            risk = abs(entry - stop)
+            if risk > 0:
+                target = entry + rr * risk
+                return Signal(bar["t"], symbol, "Liquidity Sweep Reversal", "BUY", entry, stop, target)
+
+    return None
+
+
 # ---------- strategy registry & API wiring ----------
 
 # Ordered catalog the UI will render
@@ -381,6 +464,9 @@ CATALOG: List[Tuple[str, str, callable]] = [
     ("ADX + EMA Trend Pullback", "Enter pullbacks within strong ADX trend", strat_adx_ema_pullback),
     ("Keltner Channel Mean Reversion", "Revert to mid after band pierce", strat_keltner_mean_reversion),
     ("Stochastic RSI Reversal", "Reversal when StochRSI exits extremes", strat_stoch_rsi_reversal),
+
+    # Pure price action (no indicators)
+    ("Liquidity Sweep Reversal", "Fade sweeps of prior swing highs/lows when price closes back inside", strat_liquidity_sweep_reversal),
 ]
 
 # Defaults used by your /api/strategies endpoint (and UI param editor)
@@ -397,6 +483,9 @@ DEFAULT_PARAMS: Dict[str, Dict[str, float]] = {
     "ADX + EMA Trend Pullback": {"ema_len": 50, "adx_len": 14, "adx_thr": 20.0},
     "Keltner Channel Mean Reversion": {"ema_len": 20, "atr_len": 10, "mult": 1.5},
     "Stochastic RSI Reversal": {"rsi_len": 14, "stoch_len": 14, "overbought": 80.0, "oversold": 20.0},
+
+    # LSR default params
+    "Liquidity Sweep Reversal": {"swing_look": 2, "sweep_frac": 0.20, "buffer": 0.00010, "rr": 1.5},
 }
 
 def catalog() -> List[Dict[str, str]]:

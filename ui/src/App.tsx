@@ -61,7 +61,7 @@ const toast: {
   info: (message: string, options?: any) => void;
 } = _toast as any;
 
-// ---------------- Fallback strategies (includes 6 new ones) ----------------
+// ---------------- Fallback strategies (includes 6 new ones + LSR) ----------------
 const FALLBACK_STRATEGY_INFO: Array<{ name: string; winRate: number; description: string }> = [
   { name: 'RSI Crossover', winRate: 68, description: 'Momentum reversal on RSI thresholds' },
   { name: 'MACD Divergence', winRate: 72, description: 'Signal-line crosses for momentum shifts' },
@@ -76,6 +76,9 @@ const FALLBACK_STRATEGY_INFO: Array<{ name: string; winRate: number; description
   { name: 'ADX + EMA Trend Pullback', winRate: 63, description: 'Pullback entries inside strong ADX trend' },
   { name: 'Keltner Channel Mean Reversion', winRate: 58, description: 'Revert to mid after channel pierce' },
   { name: 'Stochastic RSI Reversal', winRate: 59, description: 'Reversal when StochRSI exits extremes' },
+
+  // NEW: pure price-action strategy (no indicators)
+  { name: 'Liquidity Sweep Reversal', winRate: 61, description: 'Fade sweeps of prior swing highs/lows when price closes back inside' },
 ];
 
 const DEFAULT_STRATEGIES: Strategy[] = FALLBACK_STRATEGY_INFO.map(({ name, winRate, description }) => ({
@@ -194,7 +197,6 @@ function useSounds() {
         const a = soundsRef.current?.[key];
         if (a) {
           a.pause();
-          // rewind, so next play starts from beginning
           try { a.currentTime = 0; } catch {}
         }
         if (soundsRef.current) soundsRef.current[key] = undefined;
@@ -203,7 +205,7 @@ function useSounds() {
   }, []);
 
   const play = useCallback((key: SoundKey) => {
-    if (!enabled) return; // gate until enabled
+    if (!enabled) return;
     const a = soundsRef.current?.[key];
     if (!a) return;
     try {
@@ -218,7 +220,6 @@ function useSounds() {
     setEnabled((prev) => {
       const next = !prev;
       if (!next) {
-        // turning OFF -> pause any playing sound
         (Object.keys(SOUND_URLS) as SoundKey[]).forEach((k) => {
           const a = soundsRef.current?.[k];
           if (a) {
@@ -322,7 +323,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Strategies (merge backend catalog with fallback to ensure 6 new are present)
+  // Strategies (merge backend catalog with fallback to ensure 6 new + LSR are present)
   useEffect(() => {
     let cancelled = false;
 
@@ -750,13 +751,13 @@ export default function App() {
 
             {/* Enable sound button (prevents autoplay errors) */}
             <Button
-  variant={enabled ? 'secondary' : 'default'}
-  onClick={toggle}
-  className="gap-2"
-  title={enabled ? 'Click to disable sounds' : 'Click to enable sounds'}
->
-  {enabled ? '🔊 Sound on' : '🔇 Sound off'}
-</Button>
+              variant={enabled ? 'secondary' : 'default'}
+              onClick={toggle}
+              className="gap-2"
+              title={enabled ? 'Click to disable sounds' : 'Click to enable sounds'}
+            >
+              {enabled ? '🔊 Sound on' : '🔇 Sound off'}
+            </Button>
 
             <Button
               variant={isRunning ? 'destructive' : 'default'}
