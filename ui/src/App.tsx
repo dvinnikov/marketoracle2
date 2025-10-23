@@ -7,7 +7,7 @@ import { InstrumentSelector, InstrumentOption } from './components/InstrumentSel
 import { PredictionPanel } from './components/PredictionPanel';
 import { Button } from './components/ui/button';
 import { Toaster } from './components/ui/sonner';
-import { toast } from 'sonner';
+import { toast as _toast } from 'sonner';
 import { apiGet, apiPost, WS_BASE_URL } from './lib/api';
 
 type BackendSignal = {
@@ -51,6 +51,15 @@ type PredictionResponse = {
   confidence: number;
   target?: number | null;
 };
+
+
+const toast: {
+  (message: string, options?: any): void;
+  success: (message: string, options?: any) => void;
+  error: (message: string, options?: any) => void;
+  info: (message: string, options?: any) => void;
+} = _toast as any;
+
 
 const STRATEGY_WIN_RATE_FALLBACK: Record<string, number> = {
   'RSI Crossover': 68,

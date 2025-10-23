@@ -1,31 +1,52 @@
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { Badge } from './ui/badge';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Badge } from "./ui/badge";
+import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 
-interface PredictionPanelProps {
-  prediction: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-  confidence: number;
+type UIDirection = "BULLISH" | "BEARISH" | "NEUTRAL";
+
+export interface PredictionPanelProps {
+  /** New-style props */
+  prediction?: UIDirection;
   targetPrice?: number;
-  timeframe: string;
+  timeframe?: string;
+
+  /** Back-compat with callers passing these names */
+  instrument?: string;          // optional display only
+  direction?: UIDirection;      // alias of prediction
+  target?: number;              // alias of targetPrice
+
+  confidence: number;           // shared
 }
 
-export function PredictionPanel({ prediction, confidence, targetPrice, timeframe }: PredictionPanelProps) {
+export function PredictionPanel(props: PredictionPanelProps) {
+  // Normalize props coming from either call site
+  const direction: UIDirection = props.prediction ?? props.direction ?? "NEUTRAL";
+  const target =
+    typeof props.targetPrice === "number"
+      ? props.targetPrice
+      : typeof props.target === "number"
+      ? props.target
+      : undefined;
+
+  // If timeframe not provided, show a friendly default
+  const timeframeLabel = props.timeframe ?? "H1";
+
   const getPredictionColor = () => {
-    switch (prediction) {
-      case 'BULLISH':
-        return 'text-green-500';
-      case 'BEARISH':
-        return 'text-red-500';
+    switch (direction) {
+      case "BULLISH":
+        return "text-green-500";
+      case "BEARISH":
+        return "text-red-500";
       default:
-        return 'text-muted-foreground';
+        return "text-muted-foreground";
     }
   };
 
   const getPredictionIcon = () => {
-    switch (prediction) {
-      case 'BULLISH':
+    switch (direction) {
+      case "BULLISH":
         return <TrendingUp className="w-6 h-6" />;
-      case 'BEARISH':
+      case "BEARISH":
         return <TrendingDown className="w-6 h-6" />;
       default:
         return <Minus className="w-6 h-6" />;
@@ -41,24 +62,25 @@ export function PredictionPanel({ prediction, confidence, targetPrice, timeframe
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className={getPredictionColor()}>
-                {getPredictionIcon()}
-              </div>
+              <div className={getPredictionColor()}>{getPredictionIcon()}</div>
               <div>
-                <p className={`${getPredictionColor()}`}>{prediction}</p>
-                <p className="text-muted-foreground text-sm">{timeframe}</p>
+                <p className={getPredictionColor()}>{direction}</p>
+                <p className="text-muted-foreground text-sm">
+                  {props.instrument ? `${props.instrument} • ` : ""}
+                  {timeframeLabel}
+                </p>
               </div>
             </div>
-            <Badge variant={confidence >= 70 ? 'default' : 'secondary'}>
-              {confidence}% Confidence
+            <Badge variant={props.confidence >= 70 ? "default" : "secondary"}>
+              {props.confidence}% Confidence
             </Badge>
           </div>
-          
-          {targetPrice && (
+
+          {typeof target === "number" && (
             <div className="pt-3 border-t border-border">
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Target Price:</span>
-                <span className="text-foreground">{targetPrice.toFixed(5)}</span>
+                <span className="text-foreground">{target.toFixed(5)}</span>
               </div>
             </div>
           )}
