@@ -172,3 +172,77 @@ curl -X POST http://127.0.0.1:8000/api/strategies/start   -H "Content-Type: appl
 ## 10) License
 
 MIT (or your choice). Add your license file and update this line accordingly.
+
+---
+
+## 11) Launch the UI (Vite + React)
+
+This repo includes a simple UI app scaffolded with **Vite + React** in the `ui/` folder (or your own). The UI talks to the backend via REST/WebSocket and expects a base URL in an env variable.
+
+### A) Prereqs
+- Node.js 18+ (recommend LTS). Check with `node -v`.
+- Package manager of your choice: npm / pnpm / yarn.
+
+### B) Configure backend URL
+Create `ui/.env` (for local dev) with the API base:
+```ini
+# ui/.env
+VITE_BACKEND_URL=http://127.0.0.1:8000
+```
+> The UI will use this to call endpoints like `${import.meta.env.VITE_BACKEND_URL}/api/...` and WS URLs like `ws://...`.
+
+### C) Install dependencies
+From the `ui/` directory:
+```bash
+# choose one
+npm install
+# or
+pnpm install
+# or
+yarn install
+```
+
+If you see a missing import error (e.g., `tailwind-merge`), install the needed deps in **ui/**:
+```bash
+npm i tailwind-merge clsx
+# or pnpm add tailwind-merge clsx
+```
+
+### D) Run the dev server
+```bash
+# from ui/
+npm run dev
+# or pnpm dev / yarn dev
+```
+Open the printed local URL (e.g., `http://localhost:5173`). Make sure the **backend** is running at `VITE_BACKEND_URL` (default `http://127.0.0.1:8000`).
+
+### E) Build for production
+```bash
+# from ui/
+npm run build
+# or pnpm build / yarn build
+```
+Artifacts will be in `ui/dist/`. You can preview the build locally:
+```bash
+npm run preview
+```
+
+### F) Common UI issues
+- **node_modules committed**: ensure `.gitignore` exists at repo root **and** `ui/.gitignore`:
+  ```gitignore
+  # ui/.gitignore
+  node_modules/
+  dist/
+  .vite/
+  ```
+  Then untrack cached files:
+  ```bash
+  git rm -r --cached ui/node_modules node_modules
+  git add .
+  git commit -m "fix: ignore node modules"
+  ```
+- **CORS**: backend already enables `allow_origins=["*"]`. If you lock this down, add your UI origin (e.g., `http://localhost:5173`).  
+- **WS URL**: when constructing WebSocket URLs in the UI, replace `http` → `ws`:  
+  `new WebSocket(VITE_BACKEND_URL.replace('http','ws') + '/ws/ticks?symbol=EURUSD')`.
+
+---

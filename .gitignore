@@ -59,11 +59,56 @@ ENV/
 logs/
 uvicorn.log
 
-# --- Web assets (optional; keep html in repo) ---
-# node_modules/
-# .parcel-cache/
-# .next/
-# out/
+# --- Frontend (Vite + React) ---
+# Node modules (root and any subpackages)
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Vite caches
+.vite/
+vite.config.local.*
+vite.cache/
+*.tsbuildinfo
+
+# Build output
+dist/
+out/
+.storybook-out/
+storybook-static/
+
+# Tooling caches
+.eslintcache
+.stylelintcache
+.turbo/
+.parcel-cache/
+
+# Testing (optional)
+coverage/
+cypress/videos/
+cypress/screenshots/
+playwright-report/
+test-results/
+
+# Local env for frontend frameworks
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Hosting / platform artifacts (optional)
+.vercel/
+.netlify/
+firebase.json
+.firebaserc
+functions/node_modules/
 
 # --- MT5 / MQL build artifacts ---
 *.ex5
