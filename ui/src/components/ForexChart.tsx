@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import type { TooltipProps } from 'recharts';
 import { Badge } from './ui/badge';
 
 export interface PriceTarget {
@@ -26,7 +27,7 @@ interface ForexChartProps {
 
 export function ForexChart({ instrument, candles, currentPrice, priceTargets }: ForexChartProps) {
   const chartData = useMemo(() => (
-    candles.map((candle) => ({
+    candles.map((candle: Candle) => ({
       time: new Date(candle.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
       price: candle.close,
       timestamp: candle.timestamp,
@@ -36,12 +37,17 @@ export function ForexChart({ instrument, candles, currentPrice, priceTargets }: 
   const lastPrice = currentPrice ?? chartData[chartData.length - 1]?.price ?? 0;
   const prevPrice = chartData.length > 1 ? chartData[chartData.length - 2].price : lastPrice;
 
-  const CustomTooltip = ({ active, payload }: any) => {
+  const CustomTooltip = ({ active, payload }: TooltipProps<number, string>): JSX.Element | null => {
     if (active && payload && payload.length) {
+      const first = payload[0];
+      const value = typeof first.value === 'number' ? first.value : Number(first.value ?? 0);
+      if (!Number.isFinite(value)) {
+        return null;
+      }
       return (
         <div className="bg-card border border-border rounded-lg p-3 shadow-lg">
-          <p className="text-muted-foreground">{payload[0].payload.time}</p>
-          <p className="text-foreground">{payload[0].value.toFixed(5)}</p>
+          <p className="text-muted-foreground">{String(first.payload?.time ?? '')}</p>
+          <p className="text-foreground">{value.toFixed(5)}</p>
         </div>
       );
     }
@@ -89,7 +95,7 @@ export function ForexChart({ instrument, candles, currentPrice, priceTargets }: 
             />
 
             {/* Price targets */}
-            {priceTargets.map((target) => (
+            {priceTargets.map((target: PriceTarget) => (
               <ReferenceLine
                 key={target.id}
                 y={target.price}
@@ -114,7 +120,7 @@ export function ForexChart({ instrument, candles, currentPrice, priceTargets }: 
         {/* Price target legend */}
         {priceTargets.length > 0 && (
           <div className="absolute top-2 right-2 bg-card/90 backdrop-blur border border-border rounded-lg p-2 space-y-1">
-            {priceTargets.map((target) => (
+            {priceTargets.map((target: PriceTarget) => (
               <div key={target.id} className="flex items-center gap-2 text-xs">
                 <div 
                   className="w-3 h-3 rounded-sm" 

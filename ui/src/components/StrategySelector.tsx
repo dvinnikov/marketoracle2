@@ -17,7 +17,7 @@ interface StrategySelectorProps {
 }
 
 export function StrategySelector({ strategies, onToggleStrategy }: StrategySelectorProps) {
-  const activeCount = strategies.filter(s => s.enabled).length;
+  const activeCount = strategies.filter((strategy: Strategy) => strategy.enabled).length;
 
   return (
     <Card className="h-full flex flex-col">
@@ -30,7 +30,7 @@ export function StrategySelector({ strategies, onToggleStrategy }: StrategySelec
       <CardContent className="flex-1 overflow-hidden">
         <ScrollArea className="h-full pr-4">
           <div className="space-y-3">
-            {strategies.map((strategy) => (
+            {strategies.map((strategy: Strategy) => (
               <div
                 key={strategy.id}
                 className="flex items-start space-x-3 p-3 rounded-lg border border-border bg-card hover:bg-accent/50 transition-colors cursor-pointer"

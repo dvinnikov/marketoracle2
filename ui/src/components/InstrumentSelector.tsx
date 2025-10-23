@@ -36,7 +36,7 @@ export function InstrumentSelector({ value, onChange, instruments = FALLBACK_INS
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {options.map((instrument) => (
+          {options.map((instrument: InstrumentOption) => (
             <SelectItem key={instrument.value} value={instrument.value}>
               <div className="flex flex-col items-start">
                 <span>{instrument.label}</span>
