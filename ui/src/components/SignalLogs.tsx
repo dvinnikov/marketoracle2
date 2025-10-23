@@ -6,7 +6,9 @@ import { ArrowUp, ArrowDown } from 'lucide-react';
 
 export interface SignalLog {
   id: string;
+  symbol: string;
   time: string;
+  timestamp: number;
   strategy: string;
   side: 'BUY' | 'SELL';
   entry: number;
