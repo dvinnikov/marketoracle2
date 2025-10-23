@@ -10,6 +10,7 @@ import { Toaster } from './components/ui/sonner';
 import { toast as _toast } from 'sonner';
 import { apiGet, apiPost, WS_BASE_URL } from './lib/api';
 
+// ---------------- Types ----------------
 type BackendSignal = {
   at: number;
   symbol: string;
@@ -52,6 +53,7 @@ type PredictionResponse = {
   target?: number | null;
 };
 
+// ---------------- Toast bridge ----------------
 const toast: {
   (message: string, options?: any): void;
   success: (message: string, options?: any) => void;
@@ -59,22 +61,32 @@ const toast: {
   info: (message: string, options?: any) => void;
 } = _toast as any;
 
-const STRATEGY_WIN_RATE_FALLBACK: Record<string, number> = {
-  'RSI Crossover': 68,
-  'MACD Divergence': 72,
-  'Bollinger Bounce': 65,
-  'EMA Crossover': 61,
-  'Support/Resistance': 70,
-};
+// ---------------- Fallback strategies (includes 6 new ones) ----------------
+const FALLBACK_STRATEGY_INFO: Array<{ name: string; winRate: number; description: string }> = [
+  { name: 'RSI Crossover', winRate: 68, description: 'Momentum reversal on RSI thresholds' },
+  { name: 'MACD Divergence', winRate: 72, description: 'Signal-line crosses for momentum shifts' },
+  { name: 'Bollinger Bounce', winRate: 65, description: 'Mean reversion at Bollinger bands' },
+  { name: 'EMA Crossover', winRate: 61, description: 'Fast/slow EMA trend shifts' },
+  { name: 'Support/Resistance', winRate: 70, description: 'Rebounds at recent S/R zones' },
 
-const DEFAULT_STRATEGIES: Strategy[] = Object.entries(STRATEGY_WIN_RATE_FALLBACK).map(([name, winRate]) => ({
+  // NEW 6 (always present in UI)
+  { name: 'Supertrend Trend-Follow', winRate: 64, description: 'ATR-based trend with dynamic stopline' },
+  { name: 'Donchian Channel Breakout', winRate: 62, description: 'Breakout of N-bar high/low channel' },
+  { name: 'Ichimoku Cloud Breakout', winRate: 60, description: 'Momentum when price breaks the cloud' },
+  { name: 'ADX + EMA Trend Pullback', winRate: 63, description: 'Pullback entries inside strong ADX trend' },
+  { name: 'Keltner Channel Mean Reversion', winRate: 58, description: 'Revert to mid after channel pierce' },
+  { name: 'Stochastic RSI Reversal', winRate: 59, description: 'Reversal when StochRSI exits extremes' },
+];
+
+const DEFAULT_STRATEGIES: Strategy[] = FALLBACK_STRATEGY_INFO.map(({ name, winRate, description }) => ({
   id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
   name,
-  description: '',
+  description,
   winRate,
   enabled: false,
 }));
 
+// ---------------- Instruments fallback ----------------
 const FALLBACK_INSTRUMENT_DETAILS: Record<string, { label: string; name?: string }> = {
   EURUSD: { label: 'EUR/USD', name: 'Euro / US Dollar' },
   GBPUSD: { label: 'GBP/USD', name: 'British Pound / US Dollar' },
@@ -150,8 +162,14 @@ const SOUND_URLS: Record<SoundKey, string> = {
   disconnect: '/sounds/disconnect.mp3',
 };
 
+/**
+ * Sound hook with true toggle:
+ * - `enabled` indicates current state
+ * - `toggle()` flips it
+ * - when turning OFF, we pause all currently playing audio
+ */
 function useSounds() {
-  // Start as null; fill once in effect; use optional chaining everywhere.
+  const [enabled, setEnabled] = useState(false);
   const soundsRef = useRef<Record<SoundKey, HTMLAudioElement | undefined> | null>(null);
 
   useEffect(() => {
@@ -174,28 +192,52 @@ function useSounds() {
     return () => {
       (Object.keys(SOUND_URLS) as SoundKey[]).forEach((key) => {
         const a = soundsRef.current?.[key];
-        if (a) a.pause();
+        if (a) {
+          a.pause();
+          // rewind, so next play starts from beginning
+          try { a.currentTime = 0; } catch {}
+        }
         if (soundsRef.current) soundsRef.current[key] = undefined;
       });
     };
   }, []);
 
   const play = useCallback((key: SoundKey) => {
+    if (!enabled) return; // gate until enabled
     const a = soundsRef.current?.[key];
     if (!a) return;
     try {
       a.currentTime = 0;
-      void a.play();
+      void a.play().catch(() => { /* swallow autoplay errors */ });
     } catch {
-      // ignore autoplay errors
+      /* ignore */
     }
+  }, [enabled]);
+
+  const toggle = useCallback(() => {
+    setEnabled((prev) => {
+      const next = !prev;
+      if (!next) {
+        // turning OFF -> pause any playing sound
+        (Object.keys(SOUND_URLS) as SoundKey[]).forEach((k) => {
+          const a = soundsRef.current?.[k];
+          if (a) {
+            a.pause();
+            try { a.currentTime = 0; } catch {}
+          }
+        });
+      }
+      return next;
+    });
   }, []);
 
-  return play;
+  return { play, enabled, toggle };
 }
 
+
+// ---------------- Component ----------------
 export default function App() {
-  const playSound = useSounds();
+  const { play, enabled, toggle } = useSounds();
 
   const [instrumentOptions, setInstrumentOptions] = useState<InstrumentOption[]>([]);
   const [selectedInstrument, setSelectedInstrument] = useState<string>('EURUSD');
@@ -216,10 +258,7 @@ export default function App() {
   const [targetPrice, setTargetPrice] = useState<number | undefined>(undefined);
   const [isLoadingInstruments, setIsLoadingInstruments] = useState<boolean>(false);
 
-  // Optional-chained map for status tracking sounds
   const lastSignalStatusRef = useRef<Map<string, { status: SignalLog['status']; result?: SignalLog['result'] }> | null>(null);
-
-  // For smarter sound on prediction updates
   const lastPredictionRef = useRef<{ direction: string; target?: number | null } | null>(null);
 
   const toggleStrategy = useCallback((id: string) => {
@@ -230,7 +269,7 @@ export default function App() {
     );
   }, []);
 
-  // Instruments (merge API + fallback)
+  // Instruments
   useEffect(() => {
     let cancelled = false;
 
@@ -280,12 +319,10 @@ export default function App() {
     };
 
     loadInstruments();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  // Strategies
+  // Strategies (merge backend catalog with fallback to ensure 6 new are present)
   useEffect(() => {
     let cancelled = false;
 
@@ -293,31 +330,42 @@ export default function App() {
       try {
         const data = await apiGet<StrategiesResponse>('/api/strategies');
         if (cancelled) return;
-        if (!data.catalog?.length) return;
 
-        const mapped: Strategy[] = data.catalog.map(({ name, desc }) => ({
-          id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-          name,
-          description: desc ?? '',
-          winRate: STRATEGY_WIN_RATE_FALLBACK[name] ?? 60,
-          enabled: false,
-        }));
-        setStrategies(mapped);
-      } catch (error) {
+        const backendNames = new Set((data?.catalog ?? []).map((s) => s.name));
+        const merged = [
+          ...(data?.catalog ?? []).map(({ name, desc }) => ({
+            id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+            name,
+            description: desc ?? '',
+            winRate: (FALLBACK_STRATEGY_INFO.find((f) => f.name === name)?.winRate ?? 60),
+            enabled: false,
+          })),
+          ...FALLBACK_STRATEGY_INFO
+            .filter((f) => !backendNames.has(f.name))
+            .map((f) => ({
+              id: f.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+              name: f.name,
+              description: f.description,
+              winRate: f.winRate,
+              enabled: false,
+            })),
+        ];
+
+        const byId = new Map<string, Strategy>();
+        merged.forEach((s) => byId.set(s.id, s));
+        setStrategies(Array.from(byId.values()));
+      } catch {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          toast.error('Failed to load strategies', { description: message });
+          setStrategies(DEFAULT_STRATEGIES);
         }
       }
     };
 
     loadStrategies();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  // Market data (candles + WS ticks/bars)
+  // Market data (candles + WS)
   useEffect(() => {
     let cancelled = false;
     let barsWs: WebSocket | null = null;
@@ -343,10 +391,9 @@ export default function App() {
         if (mapped.length) {
           setCurrentPrice(mapped[mapped.length - 1].close);
         }
-      } catch (error) {
+      } catch {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          toast.error('Failed to load candles', { description: message });
+          toast.error('Failed to load candles', { description: 'Check backend /api/candles' });
           setCandles([]);
         }
       }
@@ -355,9 +402,9 @@ export default function App() {
     const connectBars = () => {
       const url = `${WS_BASE_URL}/ws/bars?symbol=${encodeURIComponent(selectedInstrument)}&res=${timeframe}`;
       barsWs = new WebSocket(url);
-      barsWs.onopen = () => playSound('connect');
-      barsWs.onclose = () => playSound('disconnect');
-      barsWs.onerror = () => playSound('disconnect');
+      barsWs.onopen = () => play('connect');
+      barsWs.onclose = () => play('disconnect');
+      barsWs.onerror = () => play('disconnect');
       barsWs.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -390,9 +437,9 @@ export default function App() {
     const connectTicks = () => {
       const url = `${WS_BASE_URL}/ws/ticks?symbol=${encodeURIComponent(selectedInstrument)}`;
       ticksWs = new WebSocket(url);
-      ticksWs.onopen = () => playSound('connect');
-      ticksWs.onclose = () => playSound('disconnect');
-      ticksWs.onerror = () => playSound('disconnect');
+      ticksWs.onopen = () => play('connect');
+      ticksWs.onclose = () => play('disconnect');
+      ticksWs.onerror = () => play('disconnect');
       ticksWs.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -417,7 +464,7 @@ export default function App() {
       barsWs?.close();
       ticksWs?.close();
     };
-  }, [selectedInstrument, timeframe, playSound]);
+  }, [selectedInstrument, timeframe, play]);
 
   // Signal history + live (+ sounds)
   useEffect(() => {
@@ -433,19 +480,18 @@ export default function App() {
         const m = new Map<string, { status: SignalLog['status']; result?: SignalLog['result'] }>();
         for (const s of mapped) m.set(s.id, { status: s.status, result: s.result });
         lastSignalStatusRef.current = m;
-      } catch (error) {
+      } catch {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          toast.error('Failed to load signal history', { description: message });
+          toast.error('Failed to load signal history', { description: 'Check backend /api/signals' });
         }
       }
     };
 
     const connectSignals = () => {
       ws = new WebSocket(`${WS_BASE_URL}/ws/signals`);
-      ws.onopen = () => playSound('connect');
-      ws.onclose = () => playSound('disconnect');
-      ws.onerror = () => playSound('disconnect');
+      ws.onopen = () => play('connect');
+      ws.onclose = () => play('disconnect');
+      ws.onerror = () => play('disconnect');
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -464,15 +510,13 @@ export default function App() {
             return [mapped, ...previousLogs].slice(0, 200);
           });
 
-          if (isNewSignal) {
-            playSound('signal');
-          }
+          if (isNewSignal) play('signal');
 
           const prev = lastSignalStatusRef.current?.get(mapped.id);
           lastSignalStatusRef.current?.set(mapped.id, { status: mapped.status, result: mapped.result });
           const resultToCheck = mapped.result ?? prev?.result;
-          if (resultToCheck === 'WIN') playSound('win');
-          else if (resultToCheck === 'LOSS') playSound('loss');
+          if (resultToCheck === 'WIN') play('win');
+          else if (resultToCheck === 'LOSS') play('loss');
 
           if (isNewSignal && mapped.symbol === selectedInstrument) {
             toast.success(`New ${mapped.side} Signal`, {
@@ -492,9 +536,9 @@ export default function App() {
       cancelled = true;
       ws?.close();
     };
-  }, [selectedInstrument, playSound]);
+  }, [selectedInstrument, play]);
 
-  // Prediction – instrument + timeframe (+ sound when direction/target change)
+  // Prediction – instrument + timeframe (+ sound)
   useEffect(() => {
     let cancelled = false;
     let ws: WebSocket | null = null;
@@ -517,17 +561,15 @@ export default function App() {
 
       const prev = lastPredictionRef.current;
       const changedDirection = prev?.direction !== payload.direction;
-      const changedTarget = typeof payload.target === 'number' && payload.target !== (prev?.target ?? null);
+      const changedTarget =
+        typeof payload.target === 'number' && payload.target !== (prev?.target ?? null);
 
-      if (changedDirection || changedTarget) {
-        playSound('prediction');
-      }
+      if (changedDirection || changedTarget) play('prediction');
       lastPredictionRef.current = { direction: payload.direction, target: payload.target };
 
       setPrediction(toUiDirection(payload.direction));
       setConfidence(Math.round(pct));
 
-      // keep last target until a numeric comes in
       if (typeof payload.target === 'number') {
         setTargetPrice(payload.target);
       }
@@ -539,19 +581,18 @@ export default function App() {
         const data = await apiGet<PredictionResponse>(`/api/prediction?${params.toString()}`);
         if (cancelled) return;
         applyPrediction(data);
-      } catch (error) {
+      } catch {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          toast.error('Failed to load prediction', { description: message });
+          toast.error('Failed to load prediction', { description: 'Check backend /api/prediction' });
         }
       }
     };
 
     const connectPrediction = () => {
       ws = new WebSocket(`${WS_BASE_URL}/ws/prediction?symbol=${encodeURIComponent(selectedInstrument)}&tf=${timeframe}`);
-      ws.onopen = () => playSound('connect');
-      ws.onclose = () => playSound('disconnect');
-      ws.onerror = () => playSound('disconnect');
+      ws.onopen = () => play('connect');
+      ws.onclose = () => play('disconnect');
+      ws.onerror = () => play('disconnect');
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -570,9 +611,9 @@ export default function App() {
       cancelled = true;
       ws?.close();
     };
-  }, [selectedInstrument, timeframe, playSound]);
+  }, [selectedInstrument, timeframe, play]);
 
-  // Stop runner if instrument changed while running
+  // Auto-stop runner on instrument change
   useEffect(() => {
     if (
       runnerInstrumentRef.current &&
@@ -649,8 +690,9 @@ export default function App() {
         runnerInstrumentRef.current = selectedInstrument;
       }
       setIsRunning(true);
+      const tfLabel = TIMEFRAME_OPTIONS.find(t => t.value === timeframe)?.label ?? timeframe;
       toast.success('Strategy runner started', {
-        description: `${selectedInstrument} • ${activeStrategies.length} strategies • TF ${TIMEFRAME_OPTIONS.find(t => t.value === timeframe)?.label ?? timeframe}`,
+        description: `${selectedInstrument} • ${activeStrategies.length} strategies • TF ${tfLabel}`,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -670,7 +712,8 @@ export default function App() {
     [instrumentSignals]
   );
 
-  const handleTfChange = (e: { target: HTMLSelectElement }) => {
+  // Use a simple explicit type to avoid React.ChangeEvent issues
+  const handleTfChange = (e: { target: { value: string } }) => {
     setTimeframe(e.target.value);
   };
 
@@ -705,6 +748,16 @@ export default function App() {
               </select>
             </div>
 
+            {/* Enable sound button (prevents autoplay errors) */}
+            <Button
+  variant={enabled ? 'secondary' : 'default'}
+  onClick={toggle}
+  className="gap-2"
+  title={enabled ? 'Click to disable sounds' : 'Click to enable sounds'}
+>
+  {enabled ? '🔊 Sound on' : '🔇 Sound off'}
+</Button>
+
             <Button
               variant={isRunning ? 'destructive' : 'default'}
               onClick={handleRunnerToggle}
@@ -731,7 +784,7 @@ export default function App() {
             <StrategySelector strategies={strategies} onToggleStrategy={toggleStrategy} />
           </div>
 
-        <div className="lg:col-span-3 flex flex-col gap-4">
+          <div className="lg:col-span-3 flex flex-col gap-4">
             <div className="bg-card border border-border rounded-lg p-4 h-[500px]">
               <ForexChart
                 instrument={selectedInstrument}
