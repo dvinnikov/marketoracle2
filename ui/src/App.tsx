@@ -52,14 +52,12 @@ type PredictionResponse = {
   target?: number | null;
 };
 
-
 const toast: {
   (message: string, options?: any): void;
   success: (message: string, options?: any) => void;
   error: (message: string, options?: any) => void;
   info: (message: string, options?: any) => void;
 } = _toast as any;
-
 
 const STRATEGY_WIN_RATE_FALLBACK: Record<string, number> = {
   'RSI Crossover': 68,
@@ -87,8 +85,6 @@ const FALLBACK_INSTRUMENT_DETAILS: Record<string, { label: string; name?: string
   EURGBP: { label: 'EUR/GBP', name: 'Euro / British Pound' },
   EURJPY: { label: 'EUR/JPY', name: 'Euro / Japanese Yen' },
 };
-
-const TIMEFRAME = '60';
 
 function formatSymbolLabel(symbol: string): string {
   if (FALLBACK_INSTRUMENT_DETAILS[symbol]?.label) {
@@ -132,9 +128,23 @@ function buildPriceTargets(signals: SignalLog[]): PriceTarget[] {
     ]);
 }
 
+const TIMEFRAME_OPTIONS = [
+  { value: '1', label: 'M1' },
+  { value: '5', label: 'M5' },
+  { value: '15', label: 'M15' },
+  { value: '30', label: 'M30' },
+  { value: '60', label: 'H1' },
+  { value: '240', label: 'H4' },
+  { value: '1440', label: 'D1' },
+];
+
 export default function App() {
   const [instrumentOptions, setInstrumentOptions] = useState<InstrumentOption[]>([]);
   const [selectedInstrument, setSelectedInstrument] = useState<string>('EURUSD');
+
+  // timeframe as state (used everywhere: candles, WS, prediction, strategies)
+  const [timeframe, setTimeframe] = useState<string>('60');
+
   const [strategies, setStrategies] = useState<Strategy[]>(DEFAULT_STRATEGIES);
   const [isRunning, setIsRunning] = useState(false);
   const [isRunnerBusy, setIsRunnerBusy] = useState(false);
@@ -157,6 +167,7 @@ export default function App() {
     );
   }, []);
 
+  // Instruments: merge API symbols with fallback so you always see a full list
   useEffect(() => {
     let cancelled = false;
 
@@ -165,11 +176,23 @@ export default function App() {
       try {
         const data = await apiGet<InstrumentsResponse>('/api/instruments');
         if (cancelled) return;
-        const options: InstrumentOption[] = data.symbols.map((symbol) => ({
-          value: symbol,
-          label: formatSymbolLabel(symbol),
-          name: FALLBACK_INSTRUMENT_DETAILS[symbol]?.name,
-        }));
+
+        // Merge API symbols with fallback keys
+        const allSymbols = Array.from(
+          new Set([
+            ...Object.keys(FALLBACK_INSTRUMENT_DETAILS),
+            ...(Array.isArray(data.symbols) ? data.symbols : []),
+          ])
+        );
+
+        const options: InstrumentOption[] = allSymbols
+          .map((symbol) => ({
+            value: symbol,
+            label: formatSymbolLabel(symbol),
+            name: FALLBACK_INSTRUMENT_DETAILS[symbol]?.name,
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label));
+
         setInstrumentOptions(options);
         setSelectedInstrument((previousInstrument: string) => {
           if (options.some((option: InstrumentOption) => option.value === previousInstrument)) {
@@ -181,11 +204,9 @@ export default function App() {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           toast.error('Failed to load instruments', { description: message });
-          const fallbackOptions: InstrumentOption[] = Object.entries(FALLBACK_INSTRUMENT_DETAILS).map(([value, meta]) => ({
-            value,
-            label: meta.label,
-            name: meta.name,
-          }));
+          const fallbackOptions: InstrumentOption[] = Object.entries(FALLBACK_INSTRUMENT_DETAILS)
+            .map(([value, meta]) => ({ value, label: meta.label, name: meta.name }))
+            .sort((a, b) => a.label.localeCompare(b.label));
           setInstrumentOptions((previousOptions: InstrumentOption[]) =>
             previousOptions.length ? previousOptions : fallbackOptions
           );
@@ -205,12 +226,12 @@ export default function App() {
     };
 
     loadInstruments();
-
     return () => {
       cancelled = true;
     };
   }, []);
 
+  // Strategies
   useEffect(() => {
     let cancelled = false;
 
@@ -218,9 +239,8 @@ export default function App() {
       try {
         const data = await apiGet<StrategiesResponse>('/api/strategies');
         if (cancelled) return;
-        if (!data.catalog?.length) {
-          return;
-        }
+        if (!data.catalog?.length) return;
+
         const mapped: Strategy[] = data.catalog.map(({ name, desc }) => ({
           id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
           name,
@@ -238,12 +258,12 @@ export default function App() {
     };
 
     loadStrategies();
-
     return () => {
       cancelled = true;
     };
   }, []);
 
+  // Market data (candles + WS ticks/bars) – react to instrument + timeframe
   useEffect(() => {
     let cancelled = false;
     let barsWs: WebSocket | null = null;
@@ -255,7 +275,7 @@ export default function App() {
 
     const loadCandles = async () => {
       try {
-        const params = new URLSearchParams({ symbol: selectedInstrument, timeframe: TIMEFRAME, limit: '200' });
+        const params = new URLSearchParams({ symbol: selectedInstrument, timeframe, limit: '200' });
         const data = await apiGet<CandlesResponse>(`/api/candles?${params.toString()}`);
         if (cancelled) return;
         const mapped: Candle[] = data.t.map((timestamp, idx) => ({
@@ -279,7 +299,7 @@ export default function App() {
     };
 
     const connectBars = () => {
-      const url = `${WS_BASE_URL}/ws/bars?symbol=${encodeURIComponent(selectedInstrument)}&res=${TIMEFRAME}`;
+      const url = `${WS_BASE_URL}/ws/bars?symbol=${encodeURIComponent(selectedInstrument)}&res=${timeframe}`;
       barsWs = new WebSocket(url);
       barsWs.onmessage = (event) => {
         if (cancelled) return;
@@ -343,8 +363,9 @@ export default function App() {
       barsWs?.close();
       ticksWs?.close();
     };
-  }, [selectedInstrument]);
+  }, [selectedInstrument, timeframe]);
 
+  // Signal history + live
   useEffect(() => {
     let cancelled = false;
     let ws: WebSocket | null = null;
@@ -404,6 +425,7 @@ export default function App() {
     };
   }, [selectedInstrument]);
 
+  // Prediction (direction/confidence/target) – react to instrument + timeframe
   useEffect(() => {
     let cancelled = false;
     let ws: WebSocket | null = null;
@@ -427,7 +449,7 @@ export default function App() {
 
     const loadPrediction = async () => {
       try {
-        const params = new URLSearchParams({ symbol: selectedInstrument, tf: TIMEFRAME });
+        const params = new URLSearchParams({ symbol: selectedInstrument, tf: timeframe });
         const data = await apiGet<PredictionResponse>(`/api/prediction?${params.toString()}`);
         if (cancelled) return;
         applyPrediction(data);
@@ -440,7 +462,7 @@ export default function App() {
     };
 
     const connectPrediction = () => {
-      ws = new WebSocket(`${WS_BASE_URL}/ws/prediction?symbol=${encodeURIComponent(selectedInstrument)}&tf=${TIMEFRAME}`);
+      ws = new WebSocket(`${WS_BASE_URL}/ws/prediction?symbol=${encodeURIComponent(selectedInstrument)}&tf=${timeframe}`);
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -462,8 +484,9 @@ export default function App() {
       cancelled = true;
       ws?.close();
     };
-  }, [selectedInstrument]);
+  }, [selectedInstrument, timeframe]);
 
+  // Stop runner if instrument changed while running
   useEffect(() => {
     if (
       runnerInstrumentRef.current &&
@@ -493,10 +516,7 @@ export default function App() {
       toast.error('Select an instrument first');
       return;
     }
-
-    if (isRunnerBusy) {
-      return;
-    }
+    if (isRunnerBusy) return;
 
     if (isRunning) {
       if (!runnerId) {
@@ -534,7 +554,7 @@ export default function App() {
         '/api/strategies/start',
         {
           symbol: selectedInstrument,
-          tf: TIMEFRAME,
+          tf: timeframe,
           strategies: activeStrategies,
         }
       );
@@ -544,7 +564,7 @@ export default function App() {
       }
       setIsRunning(true);
       toast.success('Strategy runner started', {
-        description: `${selectedInstrument} • ${activeStrategies.length} strategies`,
+        description: `${selectedInstrument} • ${activeStrategies.length} strategies • TF ${TIMEFRAME_OPTIONS.find(t => t.value === timeframe)?.label ?? timeframe}`,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -552,7 +572,7 @@ export default function App() {
     } finally {
       setIsRunnerBusy(false);
     }
-  }, [isRunnerBusy, isRunning, runnerId, selectedInstrument, strategies]);
+  }, [isRunnerBusy, isRunning, runnerId, selectedInstrument, strategies, timeframe]);
 
   const instrumentSignals = useMemo(
     () => signalLogs.filter((signal: SignalLog) => signal.symbol === selectedInstrument),
@@ -563,6 +583,11 @@ export default function App() {
     () => buildPriceTargets(instrumentSignals),
     [instrumentSignals]
   );
+
+  // Local, React-free typing for the select change (avoids TS React type exports)
+  const handleTfChange = (e: { target: HTMLSelectElement }) => {
+    setTimeframe(e.target.value);
+  };
 
   return (
     <div className="w-full min-h-screen bg-background">
@@ -575,12 +600,27 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Instrument selector (API + fallback) */}
             <InstrumentSelector
               value={selectedInstrument}
               onChange={setSelectedInstrument}
               instruments={instrumentOptions}
               disabled={isLoadingInstruments}
             />
+
+            {/* Timeframe selector */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-muted-foreground">TF</label>
+              <select
+                className="h-9 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                value={timeframe}
+                onChange={handleTfChange}
+              >
+                {TIMEFRAME_OPTIONS.map((tf) => (
+                  <option key={tf.value} value={tf.value}>{tf.label}</option>
+                ))}
+              </select>
+            </div>
 
             <Button
               variant={isRunning ? 'destructive' : 'default'}
@@ -622,16 +662,16 @@ export default function App() {
               prediction={prediction}
               confidence={confidence}
               targetPrice={targetPrice}
-              timeframe="Next 1-4 hours"
+              timeframe={TIMEFRAME_OPTIONS.find(t => t.value === timeframe)?.label ?? 'H1'}
             />
           </div>
         </div>
 
         <div className="min-h-[350px]">
-          <SignalLogs logs={instrumentSignals} />
+          {/* Full logs (component shows instrument column) */}
+          <SignalLogs logs={signalLogs} />
         </div>
       </div>
     </div>
   );
 }
-

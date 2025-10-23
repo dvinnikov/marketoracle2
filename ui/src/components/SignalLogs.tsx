@@ -6,7 +6,7 @@ import { ArrowUp, ArrowDown } from 'lucide-react';
 
 export interface SignalLog {
   id: string;
-  symbol: string;
+  symbol: string; // instrument
   time: string;
   timestamp: number;
   strategy: string;
@@ -65,6 +65,7 @@ export function SignalLogs({ logs }: SignalLogsProps) {
             <TableHeader className="sticky top-0 bg-card z-10">
               <TableRow>
                 <TableHead>Time</TableHead>
+                <TableHead>Instrument</TableHead>
                 <TableHead>Strategy</TableHead>
                 <TableHead>Side</TableHead>
                 <TableHead>Entry</TableHead>
@@ -78,7 +79,7 @@ export function SignalLogs({ logs }: SignalLogsProps) {
             <TableBody>
               {logs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                     No signals yet. Select strategies and wait for signals...
                   </TableCell>
                 </TableRow>
@@ -86,6 +87,7 @@ export function SignalLogs({ logs }: SignalLogsProps) {
                 logs.map((log: SignalLog) => (
                   <TableRow key={log.id}>
                     <TableCell className="text-muted-foreground">{log.time}</TableCell>
+                    <TableCell>{log.symbol}</TableCell>
                     <TableCell>{log.strategy}</TableCell>
                     <TableCell>
                       <Badge variant={log.side === 'BUY' ? 'default' : 'destructive'} className="flex items-center gap-1 w-fit">
