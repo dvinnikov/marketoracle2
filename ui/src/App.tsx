@@ -48,7 +48,7 @@ type SignalsResponse = {
 
 type PredictionResponse = {
   direction: 'BUY' | 'SELL' | 'NEUTRAL';
-  confidence: number;
+  confidence: number; // 0..1 or 0..100
   target?: number | null;
 };
 
@@ -138,11 +138,68 @@ const TIMEFRAME_OPTIONS = [
   { value: '1440', label: 'D1' },
 ];
 
+// ---------- Sound system ----------
+type SoundKey = 'signal' | 'prediction' | 'win' | 'loss' | 'connect' | 'disconnect';
+
+const SOUND_URLS: Record<SoundKey, string> = {
+  signal: '/sounds/signal.mp3',
+  prediction: '/sounds/prediction.mp3',
+  win: '/sounds/win.mp3',
+  loss: '/sounds/loss.mp3',
+  connect: '/sounds/connect.mp3',
+  disconnect: '/sounds/disconnect.mp3',
+};
+
+function useSounds() {
+  // Start as null; fill once in effect; use optional chaining everywhere.
+  const soundsRef = useRef<Record<SoundKey, HTMLAudioElement | undefined> | null>(null);
+
+  useEffect(() => {
+    const obj: Record<SoundKey, HTMLAudioElement | undefined> = {
+      signal: undefined,
+      prediction: undefined,
+      win: undefined,
+      loss: undefined,
+      connect: undefined,
+      disconnect: undefined,
+    };
+    (Object.keys(SOUND_URLS) as SoundKey[]).forEach((key) => {
+      const a = new Audio(SOUND_URLS[key]);
+      a.preload = 'auto';
+      a.volume = 0.6;
+      obj[key] = a;
+    });
+    soundsRef.current = obj;
+
+    return () => {
+      (Object.keys(SOUND_URLS) as SoundKey[]).forEach((key) => {
+        const a = soundsRef.current?.[key];
+        if (a) a.pause();
+        if (soundsRef.current) soundsRef.current[key] = undefined;
+      });
+    };
+  }, []);
+
+  const play = useCallback((key: SoundKey) => {
+    const a = soundsRef.current?.[key];
+    if (!a) return;
+    try {
+      a.currentTime = 0;
+      void a.play();
+    } catch {
+      // ignore autoplay errors
+    }
+  }, []);
+
+  return play;
+}
+
 export default function App() {
+  const playSound = useSounds();
+
   const [instrumentOptions, setInstrumentOptions] = useState<InstrumentOption[]>([]);
   const [selectedInstrument, setSelectedInstrument] = useState<string>('EURUSD');
 
-  // timeframe as state (used everywhere: candles, WS, prediction, strategies)
   const [timeframe, setTimeframe] = useState<string>('60');
 
   const [strategies, setStrategies] = useState<Strategy[]>(DEFAULT_STRATEGIES);
@@ -159,6 +216,12 @@ export default function App() {
   const [targetPrice, setTargetPrice] = useState<number | undefined>(undefined);
   const [isLoadingInstruments, setIsLoadingInstruments] = useState<boolean>(false);
 
+  // Optional-chained map for status tracking sounds
+  const lastSignalStatusRef = useRef<Map<string, { status: SignalLog['status']; result?: SignalLog['result'] }> | null>(null);
+
+  // For smarter sound on prediction updates
+  const lastPredictionRef = useRef<{ direction: string; target?: number | null } | null>(null);
+
   const toggleStrategy = useCallback((id: string) => {
     setStrategies((prevStrategies: Strategy[]) =>
       prevStrategies.map((strategy: Strategy) =>
@@ -167,7 +230,7 @@ export default function App() {
     );
   }, []);
 
-  // Instruments: merge API symbols with fallback so you always see a full list
+  // Instruments (merge API + fallback)
   useEffect(() => {
     let cancelled = false;
 
@@ -177,7 +240,6 @@ export default function App() {
         const data = await apiGet<InstrumentsResponse>('/api/instruments');
         if (cancelled) return;
 
-        // Merge API symbols with fallback keys
         const allSymbols = Array.from(
           new Set([
             ...Object.keys(FALLBACK_INSTRUMENT_DETAILS),
@@ -194,11 +256,9 @@ export default function App() {
           .sort((a, b) => a.label.localeCompare(b.label));
 
         setInstrumentOptions(options);
-        setSelectedInstrument((previousInstrument: string) => {
-          if (options.some((option: InstrumentOption) => option.value === previousInstrument)) {
-            return previousInstrument;
-          }
-          return options[0]?.value ?? previousInstrument ?? 'EURUSD';
+        setSelectedInstrument((prev) => {
+          if (options.some((o) => o.value === prev)) return prev;
+          return options[0]?.value ?? prev ?? 'EURUSD';
         });
       } catch (error) {
         if (!cancelled) {
@@ -207,21 +267,15 @@ export default function App() {
           const fallbackOptions: InstrumentOption[] = Object.entries(FALLBACK_INSTRUMENT_DETAILS)
             .map(([value, meta]) => ({ value, label: meta.label, name: meta.name }))
             .sort((a, b) => a.label.localeCompare(b.label));
-          setInstrumentOptions((previousOptions: InstrumentOption[]) =>
-            previousOptions.length ? previousOptions : fallbackOptions
-          );
-          setSelectedInstrument((previousInstrument: string) => {
+          setInstrumentOptions((prev) => (prev.length ? prev : fallbackOptions));
+          setSelectedInstrument((prev) => {
             const options = fallbackOptions.length ? fallbackOptions : instrumentOptions;
-            if (options.some((option: InstrumentOption) => option.value === previousInstrument)) {
-              return previousInstrument;
-            }
-            return options[0]?.value ?? previousInstrument ?? 'EURUSD';
+            if (options.some((o) => o.value === prev)) return prev;
+            return options[0]?.value ?? prev ?? 'EURUSD';
           });
         }
       } finally {
-        if (!cancelled) {
-          setIsLoadingInstruments(false);
-        }
+        if (!cancelled) setIsLoadingInstruments(false);
       }
     };
 
@@ -263,7 +317,7 @@ export default function App() {
     };
   }, []);
 
-  // Market data (candles + WS ticks/bars) – react to instrument + timeframe
+  // Market data (candles + WS ticks/bars)
   useEffect(() => {
     let cancelled = false;
     let barsWs: WebSocket | null = null;
@@ -301,6 +355,9 @@ export default function App() {
     const connectBars = () => {
       const url = `${WS_BASE_URL}/ws/bars?symbol=${encodeURIComponent(selectedInstrument)}&res=${timeframe}`;
       barsWs = new WebSocket(url);
+      barsWs.onopen = () => playSound('connect');
+      barsWs.onclose = () => playSound('disconnect');
+      barsWs.onerror = () => playSound('disconnect');
       barsWs.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -328,14 +385,14 @@ export default function App() {
           console.error('Failed to parse bar payload', error);
         }
       };
-      barsWs.onerror = (event) => {
-        console.error('Bars websocket error', event);
-      };
     };
 
     const connectTicks = () => {
       const url = `${WS_BASE_URL}/ws/ticks?symbol=${encodeURIComponent(selectedInstrument)}`;
       ticksWs = new WebSocket(url);
+      ticksWs.onopen = () => playSound('connect');
+      ticksWs.onclose = () => playSound('disconnect');
+      ticksWs.onerror = () => playSound('disconnect');
       ticksWs.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -349,9 +406,6 @@ export default function App() {
           console.error('Failed to parse tick payload', error);
         }
       };
-      ticksWs.onerror = (event) => {
-        console.error('Ticks websocket error', event);
-      };
     };
 
     loadCandles();
@@ -363,9 +417,9 @@ export default function App() {
       barsWs?.close();
       ticksWs?.close();
     };
-  }, [selectedInstrument, timeframe]);
+  }, [selectedInstrument, timeframe, playSound]);
 
-  // Signal history + live
+  // Signal history + live (+ sounds)
   useEffect(() => {
     let cancelled = false;
     let ws: WebSocket | null = null;
@@ -376,6 +430,9 @@ export default function App() {
         if (cancelled) return;
         const mapped = data.signals.map(mapSignal).sort((a, b) => b.timestamp - a.timestamp);
         setSignalLogs(mapped);
+        const m = new Map<string, { status: SignalLog['status']; result?: SignalLog['result'] }>();
+        for (const s of mapped) m.set(s.id, { status: s.status, result: s.result });
+        lastSignalStatusRef.current = m;
       } catch (error) {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : 'Unknown error';
@@ -386,11 +443,15 @@ export default function App() {
 
     const connectSignals = () => {
       ws = new WebSocket(`${WS_BASE_URL}/ws/signals`);
+      ws.onopen = () => playSound('connect');
+      ws.onclose = () => playSound('disconnect');
+      ws.onerror = () => playSound('disconnect');
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
           const payload = JSON.parse(event.data) as BackendSignal;
           const mapped = mapSignal(payload);
+
           let isNewSignal = false;
           setSignalLogs((previousLogs: SignalLog[]) => {
             const idx = previousLogs.findIndex((signal: SignalLog) => signal.id === mapped.id);
@@ -402,6 +463,17 @@ export default function App() {
             isNewSignal = true;
             return [mapped, ...previousLogs].slice(0, 200);
           });
+
+          if (isNewSignal) {
+            playSound('signal');
+          }
+
+          const prev = lastSignalStatusRef.current?.get(mapped.id);
+          lastSignalStatusRef.current?.set(mapped.id, { status: mapped.status, result: mapped.result });
+          const resultToCheck = mapped.result ?? prev?.result;
+          if (resultToCheck === 'WIN') playSound('win');
+          else if (resultToCheck === 'LOSS') playSound('loss');
+
           if (isNewSignal && mapped.symbol === selectedInstrument) {
             toast.success(`New ${mapped.side} Signal`, {
               description: `${mapped.strategy} - Entry: ${mapped.entry.toFixed(5)}`,
@@ -410,9 +482,6 @@ export default function App() {
         } catch (error) {
           console.error('Failed to parse signal payload', error);
         }
-      };
-      ws.onerror = (event) => {
-        console.error('Signals websocket error', event);
       };
     };
 
@@ -423,9 +492,9 @@ export default function App() {
       cancelled = true;
       ws?.close();
     };
-  }, [selectedInstrument]);
+  }, [selectedInstrument, playSound]);
 
-  // Prediction (direction/confidence/target) – react to instrument + timeframe
+  // Prediction – instrument + timeframe (+ sound when direction/target change)
   useEffect(() => {
     let cancelled = false;
     let ws: WebSocket | null = null;
@@ -442,9 +511,26 @@ export default function App() {
 
     const applyPrediction = (payload: PredictionResponse | null) => {
       if (!payload) return;
+
+      const raw = payload.confidence ?? 0;
+      const pct = raw > 1 ? raw : raw * 100;
+
+      const prev = lastPredictionRef.current;
+      const changedDirection = prev?.direction !== payload.direction;
+      const changedTarget = typeof payload.target === 'number' && payload.target !== (prev?.target ?? null);
+
+      if (changedDirection || changedTarget) {
+        playSound('prediction');
+      }
+      lastPredictionRef.current = { direction: payload.direction, target: payload.target };
+
       setPrediction(toUiDirection(payload.direction));
-      setConfidence(Math.round((payload.confidence ?? 0) * 100));
-      setTargetPrice(typeof payload.target === 'number' ? payload.target : undefined);
+      setConfidence(Math.round(pct));
+
+      // keep last target until a numeric comes in
+      if (typeof payload.target === 'number') {
+        setTargetPrice(payload.target);
+      }
     };
 
     const loadPrediction = async () => {
@@ -463,6 +549,9 @@ export default function App() {
 
     const connectPrediction = () => {
       ws = new WebSocket(`${WS_BASE_URL}/ws/prediction?symbol=${encodeURIComponent(selectedInstrument)}&tf=${timeframe}`);
+      ws.onopen = () => playSound('connect');
+      ws.onclose = () => playSound('disconnect');
+      ws.onerror = () => playSound('disconnect');
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -471,9 +560,6 @@ export default function App() {
         } catch (error) {
           console.error('Failed to parse prediction payload', error);
         }
-      };
-      ws.onerror = (event) => {
-        console.error('Prediction websocket error', event);
       };
     };
 
@@ -484,7 +570,7 @@ export default function App() {
       cancelled = true;
       ws?.close();
     };
-  }, [selectedInstrument, timeframe]);
+  }, [selectedInstrument, timeframe, playSound]);
 
   // Stop runner if instrument changed while running
   useEffect(() => {
@@ -584,7 +670,6 @@ export default function App() {
     [instrumentSignals]
   );
 
-  // Local, React-free typing for the select change (avoids TS React type exports)
   const handleTfChange = (e: { target: HTMLSelectElement }) => {
     setTimeframe(e.target.value);
   };
@@ -600,7 +685,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Instrument selector (API + fallback) */}
             <InstrumentSelector
               value={selectedInstrument}
               onChange={setSelectedInstrument}
@@ -608,7 +692,6 @@ export default function App() {
               disabled={isLoadingInstruments}
             />
 
-            {/* Timeframe selector */}
             <div className="flex items-center gap-2">
               <label className="text-sm text-muted-foreground">TF</label>
               <select
@@ -648,7 +731,7 @@ export default function App() {
             <StrategySelector strategies={strategies} onToggleStrategy={toggleStrategy} />
           </div>
 
-          <div className="lg:col-span-3 flex flex-col gap-4">
+        <div className="lg:col-span-3 flex flex-col gap-4">
             <div className="bg-card border border-border rounded-lg p-4 h-[500px]">
               <ForexChart
                 instrument={selectedInstrument}
@@ -668,7 +751,6 @@ export default function App() {
         </div>
 
         <div className="min-h-[350px]">
-          {/* Full logs (component shows instrument column) */}
           <SignalLogs logs={signalLogs} />
         </div>
       </div>
