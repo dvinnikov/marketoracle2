@@ -165,12 +165,6 @@ const SOUND_URLS: Record<SoundKey, string> = {
   disconnect: '/sounds/disconnect.mp3',
 };
 
-/**
- * Sound hook with true toggle:
- * - `enabled` indicates current state
- * - `toggle()` flips it
- * - when turning OFF, we pause all currently playing audio
- */
 function useSounds() {
   const [enabled, setEnabled] = useState(false);
   const soundsRef = useRef<Record<SoundKey, HTMLAudioElement | undefined> | null>(null);
@@ -210,10 +204,8 @@ function useSounds() {
     if (!a) return;
     try {
       a.currentTime = 0;
-      void a.play().catch(() => { /* swallow autoplay errors */ });
-    } catch {
-      /* ignore */
-    }
+      void a.play().catch(() => {});
+    } catch {}
   }, [enabled]);
 
   const toggle = useCallback(() => {
@@ -235,6 +227,29 @@ function useSounds() {
   return { play, enabled, toggle };
 }
 
+// ---------------- Persistence ----------------
+const STORAGE_KEY = 'mo_state_v2';
+
+type PersistedState = {
+  selectedInstrument?: string;
+  timeframe?: string;
+  strategies?: Strategy[];
+  signalLogs?: SignalLog[];
+  balance?: number;
+};
+
+const ACCOUNT_START_BALANCE = 10000;
+
+// helper: identify JPY quote for pip factor
+function isJpyPair(symbol: string): boolean {
+  return /JPY$/.test(symbol);
+}
+
+function computePnlUSD(symbol: string, side: 'BUY' | 'SELL', entry: number, exit: number): number {
+  const factor = isJpyPair(symbol) ? 1000 : 10000;
+  const delta = side === 'BUY' ? (exit - entry) : (entry - exit);
+  return +(delta * factor).toFixed(2);
+}
 
 // ---------------- Component ----------------
 export default function App() {
@@ -242,7 +257,6 @@ export default function App() {
 
   const [instrumentOptions, setInstrumentOptions] = useState<InstrumentOption[]>([]);
   const [selectedInstrument, setSelectedInstrument] = useState<string>('EURUSD');
-
   const [timeframe, setTimeframe] = useState<string>('60');
 
   const [strategies, setStrategies] = useState<Strategy[]>(DEFAULT_STRATEGIES);
@@ -254,6 +268,8 @@ export default function App() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [signalLogs, setSignalLogs] = useState<SignalLog[]>([]);
+  const [balance, setBalance] = useState<number>(ACCOUNT_START_BALANCE);
+
   const [prediction, setPrediction] = useState<'BULLISH' | 'BEARISH' | 'NEUTRAL'>('NEUTRAL');
   const [confidence, setConfidence] = useState<number>(50);
   const [targetPrice, setTargetPrice] = useState<number | undefined>(undefined);
@@ -261,6 +277,51 @@ export default function App() {
 
   const lastSignalStatusRef = useRef<Map<string, { status: SignalLog['status']; result?: SignalLog['result'] }> | null>(null);
   const lastPredictionRef = useRef<{ direction: string; target?: number | null } | null>(null);
+
+  // ---- Rehydrate persisted state (early) ----
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const parsed: PersistedState = JSON.parse(raw);
+
+      if (parsed.selectedInstrument) setSelectedInstrument(parsed.selectedInstrument);
+      if (parsed.timeframe) setTimeframe(parsed.timeframe);
+      if (Array.isArray(parsed.strategies) && parsed.strategies.length) setStrategies(parsed.strategies);
+      if (typeof parsed.balance === 'number') setBalance(parsed.balance);
+
+      if (Array.isArray(parsed.signalLogs)) {
+        // ensure newest first
+        const cleaned = parsed.signalLogs
+          .filter((s): s is SignalLog => !!s && typeof s.id === 'string')
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, 500); // cap
+        setSignalLogs(cleaned);
+
+        const m = new Map<string, { status: SignalLog['status']; result?: SignalLog['result'] }>();
+        for (const s of cleaned) m.set(s.id, { status: s.status, result: s.result });
+        lastSignalStatusRef.current = m;
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // ---- Persist on changes ----
+  useEffect(() => {
+    const toSave: PersistedState = {
+      selectedInstrument,
+      timeframe,
+      strategies,
+      signalLogs,
+      balance,
+    };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [selectedInstrument, timeframe, strategies, signalLogs, balance]);
 
   const toggleStrategy = useCallback((id: string) => {
     setStrategies((prevStrategies: Strategy[]) =>
@@ -323,7 +384,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Strategies (merge backend catalog with fallback to ensure 6 new + LSR are present)
+  // Strategies (merge backend catalog with fallback so all client-known ones appear)
   useEffect(() => {
     let cancelled = false;
 
@@ -339,7 +400,7 @@ export default function App() {
             name,
             description: desc ?? '',
             winRate: (FALLBACK_STRATEGY_INFO.find((f) => f.name === name)?.winRate ?? 60),
-            enabled: false,
+            enabled: (strategies.find(s => s.name === name)?.enabled) ?? false,
           })),
           ...FALLBACK_STRATEGY_INFO
             .filter((f) => !backendNames.has(f.name))
@@ -348,7 +409,7 @@ export default function App() {
               name: f.name,
               description: f.description,
               winRate: f.winRate,
-              enabled: false,
+              enabled: (strategies.find(s => s.name === f.name)?.enabled) ?? false,
             })),
         ];
 
@@ -357,14 +418,15 @@ export default function App() {
         setStrategies(Array.from(byId.values()));
       } catch {
         if (!cancelled) {
-          setStrategies(DEFAULT_STRATEGIES);
+          // keep existing (possibly from storage) or fall back to defaults
+          if (!strategies.length) setStrategies(DEFAULT_STRATEGIES);
         }
       }
     };
 
     loadStrategies();
-    return () => { cancelled = true; };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount
 
   // Market data (candles + WS)
   useEffect(() => {
@@ -467,20 +529,35 @@ export default function App() {
     };
   }, [selectedInstrument, timeframe, play]);
 
-  // Signal history + live (+ sounds)
+  // Signal history + live (+ sounds) + merge with persisted
   useEffect(() => {
     let cancelled = false;
     let ws: WebSocket | null = null;
+
+    const mergeByIdNewest = (a: SignalLog[], b: SignalLog[]) => {
+      const map = new Map<string, SignalLog>();
+      const pickNewest = (x: SignalLog, y: SignalLog) => (x.timestamp >= y.timestamp ? x : y);
+      for (const s of a) map.set(s.id, s);
+      for (const s of b) {
+        const prev = map.get(s.id);
+        map.set(s.id, prev ? pickNewest(prev, s) : s);
+      }
+      // newest first
+      return Array.from(map.values()).sort((x, y) => y.timestamp - x.timestamp);
+    };
 
     const loadSignals = async () => {
       try {
         const data = await apiGet<SignalsResponse>('/api/signals?limit=200');
         if (cancelled) return;
-        const mapped = data.signals.map(mapSignal).sort((a, b) => b.timestamp - a.timestamp);
-        setSignalLogs(mapped);
-        const m = new Map<string, { status: SignalLog['status']; result?: SignalLog['result'] }>();
-        for (const s of mapped) m.set(s.id, { status: s.status, result: s.result });
-        lastSignalStatusRef.current = m;
+        const fromBackend = data.signals.map(mapSignal);
+        setSignalLogs((prev) => {
+          const merged = mergeByIdNewest(prev, fromBackend).slice(0, 500);
+          const m = new Map<string, { status: SignalLog['status']; result?: SignalLog['result'] }>();
+          for (const s of merged) m.set(s.id, { status: s.status, result: s.result });
+          lastSignalStatusRef.current = m;
+          return merged;
+        });
       } catch {
         if (!cancelled) {
           toast.error('Failed to load signal history', { description: 'Check backend /api/signals' });
@@ -502,22 +579,28 @@ export default function App() {
           let isNewSignal = false;
           setSignalLogs((previousLogs: SignalLog[]) => {
             const idx = previousLogs.findIndex((signal: SignalLog) => signal.id === mapped.id);
+            let next: SignalLog[];
             if (idx >= 0) {
-              const next = [...previousLogs];
+              next = [...previousLogs];
               next[idx] = mapped;
-              return next;
+            } else {
+              isNewSignal = true;
+              next = [mapped, ...previousLogs];
             }
-            isNewSignal = true;
-            return [mapped, ...previousLogs].slice(0, 200);
+            return next.slice(0, 500);
           });
 
           if (isNewSignal) play('signal');
 
           const prev = lastSignalStatusRef.current?.get(mapped.id);
           lastSignalStatusRef.current?.set(mapped.id, { status: mapped.status, result: mapped.result });
-          const resultToCheck = mapped.result ?? prev?.result;
-          if (resultToCheck === 'WIN') play('win');
-          else if (resultToCheck === 'LOSS') play('loss');
+
+          // If server already resolved a trade, reflect it to balance.
+          if (mapped.status !== 'ACTIVE' && mapped.pnl !== undefined && mapped.pnl !== null) {
+            setBalance((b) => +(b + mapped.pnl!).toFixed(2));
+            if (mapped.result === 'WIN') play('win');
+            else if (mapped.result === 'LOSS') play('loss');
+          }
 
           if (isNewSignal && mapped.symbol === selectedInstrument) {
             toast.success(`New ${mapped.side} Signal`, {
@@ -639,6 +722,81 @@ export default function App() {
     }
   }, [runnerId, selectedInstrument]);
 
+  // ---- Local auto-resolution of ACTIVE trades on price ticks (for selected instrument only) ----
+useEffect(() => {
+  if (!selectedInstrument || !Number.isFinite(currentPrice)) return;
+
+  setSignalLogs((prev) => {
+    let changed = false;
+    let balanceDelta = 0;
+
+    const next = prev.map((s): SignalLog => {
+      if (s.symbol !== selectedInstrument || s.status !== 'ACTIVE') return s;
+
+      // Check stop/target hit
+      if (s.side === 'BUY') {
+        if (currentPrice <= s.stop) {
+          const pnl = computePnlUSD(s.symbol, 'BUY', s.entry, s.stop);
+          changed = true;
+          balanceDelta += pnl;
+          play('loss');
+          return {
+            ...s,
+            status: 'STOPPED' as const,
+            result: 'LOSS' as const,
+            pnl,
+          } as SignalLog;
+        }
+        if (currentPrice >= s.target) {
+          const pnl = computePnlUSD(s.symbol, 'BUY', s.entry, s.target);
+          changed = true;
+          balanceDelta += pnl;
+          play('win');
+          return {
+            ...s,
+            status: 'CLOSED' as const,
+            result: 'WIN' as const,
+            pnl,
+          } as SignalLog;
+        }
+      } else {
+        // SELL
+        if (currentPrice >= s.stop) {
+          const pnl = computePnlUSD(s.symbol, 'SELL', s.entry, s.stop);
+          changed = true;
+          balanceDelta += pnl;
+          play('loss');
+          return {
+            ...s,
+            status: 'STOPPED' as const,
+            result: 'LOSS' as const,
+            pnl,
+          } as SignalLog;
+        }
+        if (currentPrice <= s.target) {
+          const pnl = computePnlUSD(s.symbol, 'SELL', s.entry, s.target);
+          changed = true;
+          balanceDelta += pnl;
+          play('win');
+          return {
+            ...s,
+            status: 'CLOSED' as const,
+            result: 'WIN' as const,
+            pnl,
+          } as SignalLog;
+        }
+      }
+      return s;
+    });
+
+    if (changed && balanceDelta !== 0) {
+      setBalance((b) => +(b + balanceDelta).toFixed(2));
+    }
+    return next;
+  });
+}, [currentPrice, selectedInstrument]);
+
+
   const handleRunnerToggle = useCallback(async () => {
     if (!selectedInstrument) {
       toast.error('Select an instrument first');
@@ -713,7 +871,7 @@ export default function App() {
     [instrumentSignals]
   );
 
-  // Use a simple explicit type to avoid React.ChangeEvent issues
+  // Simple explicit type to avoid ChangeEvent typings
   const handleTfChange = (e: { target: { value: string } }) => {
     setTimeframe(e.target.value);
   };
@@ -726,6 +884,11 @@ export default function App() {
           <div className="flex items-center gap-3">
             <Activity className="w-8 h-8 text-primary" />
             <h1 className="text-foreground">Forex Strategy Runner</h1>
+            <div className="text-sm text-muted-foreground ml-3">
+              Balance: <span className={balance >= ACCOUNT_START_BALANCE ? 'text-green-500' : 'text-red-500'}>
+                ${balance.toFixed(2)}
+              </span>
+            </div>
           </div>
 
           <div className="flex items-center gap-4">
