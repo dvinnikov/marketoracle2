@@ -127,6 +127,29 @@ function buildPriceTargets(signals: SignalLog[]): PriceTarget[] {
     ]);
 }
 
+function safeCloseWebSocket(socket?: WebSocket | null) {
+  if (!socket) return;
+
+  const closeSocket = () => {
+    if (!socket || socket.readyState === WebSocket.CLOSED) return;
+    try {
+      socket.close();
+    } catch {
+      // ignore best-effort close errors
+    }
+  };
+
+  if (socket.readyState === WebSocket.CONNECTING) {
+    const abort = () => {
+      closeSocket();
+    };
+    socket.addEventListener('open', abort, { once: true });
+    socket.addEventListener('error', abort, { once: true });
+  } else {
+    closeSocket();
+  }
+}
+
 const TIMEFRAME_OPTIONS = [
   { value: '1', label: 'M1' },
   { value: '5', label: 'M5' },
@@ -448,9 +471,18 @@ export default function App() {
     const connectBars = () => {
       const url = `${WS_BASE_URL}/ws/bars?symbol=${encodeURIComponent(selectedInstrument)}&res=${timeframe}`;
       barsWs = new WebSocket(url);
-      barsWs.onopen = () => play('connect');
-      barsWs.onclose = () => play('disconnect');
-      barsWs.onerror = () => play('disconnect');
+      barsWs.onopen = () => {
+        if (cancelled) return;
+        play('connect');
+      };
+      barsWs.onclose = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
+      barsWs.onerror = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
       barsWs.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -483,9 +515,18 @@ export default function App() {
     const connectTicks = () => {
       const url = `${WS_BASE_URL}/ws/ticks?symbol=${encodeURIComponent(selectedInstrument)}`;
       ticksWs = new WebSocket(url);
-      ticksWs.onopen = () => play('connect');
-      ticksWs.onclose = () => play('disconnect');
-      ticksWs.onerror = () => play('disconnect');
+      ticksWs.onopen = () => {
+        if (cancelled) return;
+        play('connect');
+      };
+      ticksWs.onclose = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
+      ticksWs.onerror = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
       ticksWs.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -507,8 +548,8 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      barsWs?.close();
-      ticksWs?.close();
+      safeCloseWebSocket(barsWs);
+      safeCloseWebSocket(ticksWs);
     };
   }, [selectedInstrument, timeframe, play]);
 
@@ -550,9 +591,18 @@ export default function App() {
 
     const connectSignals = () => {
       ws = new WebSocket(`${WS_BASE_URL}/ws/signals`);
-      ws.onopen = () => play('connect');
-      ws.onclose = () => play('disconnect');
-      ws.onerror = () => play('disconnect');
+      ws.onopen = () => {
+        if (cancelled) return;
+        play('connect');
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
+      ws.onerror = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -601,7 +651,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      ws?.close();
+      safeCloseWebSocket(ws);
     };
   }, [selectedInstrument, play]);
 
@@ -657,9 +707,18 @@ export default function App() {
 
     const connectPrediction = () => {
       ws = new WebSocket(`${WS_BASE_URL}/ws/prediction?symbol=${encodeURIComponent(selectedInstrument)}&tf=${timeframe}`);
-      ws.onopen = () => play('connect');
-      ws.onclose = () => play('disconnect');
-      ws.onerror = () => play('disconnect');
+      ws.onopen = () => {
+        if (cancelled) return;
+        play('connect');
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
+      ws.onerror = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -676,7 +735,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      ws?.close();
+      safeCloseWebSocket(ws);
     };
   }, [selectedInstrument, timeframe, play]);
 
