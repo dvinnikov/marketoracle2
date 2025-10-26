@@ -3,12 +3,18 @@ import { Activity, PauseCircle, PlayCircle } from 'lucide-react';
 import { ForexChart, Candle, PriceTarget } from './components/ForexChart';
 import { StrategySelector, Strategy } from './components/StrategySelector';
 import { SignalLogs, SignalLog } from './components/SignalLogs';
-import { InstrumentSelector, InstrumentOption } from './components/InstrumentSelector';
+import { InstrumentSelector } from './components/InstrumentSelector';
 import { PredictionPanel } from './components/PredictionPanel';
 import { Button } from './components/ui/button';
 import { Toaster } from './components/ui/sonner';
 import { toast as _toast } from 'sonner';
 import { apiGet, apiPost, WS_BASE_URL } from './lib/api';
+import {
+  FALLBACK_INSTRUMENT_DETAILS,
+  FALLBACK_INSTRUMENT_OPTIONS,
+  InstrumentOption,
+  formatSymbolLabel,
+} from './lib/instruments';
 
 // ---------------- Types ----------------
 type BackendSignal = {
@@ -88,28 +94,6 @@ const DEFAULT_STRATEGIES: Strategy[] = FALLBACK_STRATEGY_INFO.map(({ name, winRa
   winRate,
   enabled: false,
 }));
-
-// ---------------- Instruments fallback ----------------
-const FALLBACK_INSTRUMENT_DETAILS: Record<string, { label: string; name?: string }> = {
-  EURUSD: { label: 'EUR/USD', name: 'Euro / US Dollar' },
-  GBPUSD: { label: 'GBP/USD', name: 'British Pound / US Dollar' },
-  USDJPY: { label: 'USD/JPY', name: 'US Dollar / Japanese Yen' },
-  AUDUSD: { label: 'AUD/USD', name: 'Australian Dollar / US Dollar' },
-  USDCAD: { label: 'USD/CAD', name: 'US Dollar / Canadian Dollar' },
-  NZDUSD: { label: 'NZD/USD', name: 'New Zealand Dollar / US Dollar' },
-  EURGBP: { label: 'EUR/GBP', name: 'Euro / British Pound' },
-  EURJPY: { label: 'EUR/JPY', name: 'Euro / Japanese Yen' },
-};
-
-function formatSymbolLabel(symbol: string): string {
-  if (FALLBACK_INSTRUMENT_DETAILS[symbol]?.label) {
-    return FALLBACK_INSTRUMENT_DETAILS[symbol].label;
-  }
-  if (symbol.length === 6) {
-    return `${symbol.slice(0, 3)}/${symbol.slice(3)}`;
-  }
-  return symbol;
-}
 
 function mapSignal(signal: BackendSignal): SignalLog {
   const timestamp = signal.at * 1000;
@@ -353,6 +337,7 @@ export default function App() {
             value: symbol,
             label: formatSymbolLabel(symbol),
             name: FALLBACK_INSTRUMENT_DETAILS[symbol]?.name,
+            category: FALLBACK_INSTRUMENT_DETAILS[symbol]?.category,
           }))
           .sort((a, b) => a.label.localeCompare(b.label));
 
@@ -365,9 +350,7 @@ export default function App() {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           toast.error('Failed to load instruments', { description: message });
-          const fallbackOptions: InstrumentOption[] = Object.entries(FALLBACK_INSTRUMENT_DETAILS)
-            .map(([value, meta]) => ({ value, label: meta.label, name: meta.name }))
-            .sort((a, b) => a.label.localeCompare(b.label));
+          const fallbackOptions: InstrumentOption[] = FALLBACK_INSTRUMENT_OPTIONS;
           setInstrumentOptions((prev) => (prev.length ? prev : fallbackOptions));
           setSelectedInstrument((prev) => {
             const options = fallbackOptions.length ? fallbackOptions : instrumentOptions;
