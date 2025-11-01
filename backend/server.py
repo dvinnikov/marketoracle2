@@ -95,18 +95,69 @@ def _pip_from_digits_point(digits: Optional[int], point: Optional[float]) -> flo
     # FX convention: 5/3 digits -> pip = 10 * point
     return (10.0 * point) if digits in (3, 5) else point
 
-def register_instrument(symbol: str, *, digits: Optional[int] = None, point: Optional[float] = None):
-    meta = INSTRUMENTS.get(symbol, {})
+def register_instrument(
+    symbol: str,
+    *,
+    digits: Optional[int] = None,
+    point: Optional[float] = None,
+    label: Optional[str] = None,
+    name: Optional[str] = None,
+    category: Optional[str] = None,
+):
+    meta = dict(INSTRUMENTS.get(symbol, {}))
     if digits is None: digits = meta.get("digits")
     if point  is None: point  = meta.get("point")
+    if label  is None: label  = meta.get("label")
+    if name   is None: name   = meta.get("name")
+    if category is None: category = meta.get("category")
     if digits is None: digits = 5
     if point  is None: point  = 0.00001 if digits >= 5 else 0.01
-    INSTRUMENTS[symbol] = {
+    meta.update({
         "digits": digits,
         "point":  point,
         "pip":    _pip_from_digits_point(digits, point),
         "updated": now_ts(),
-    }
+    })
+    if label is not None: meta["label"] = label
+    if name is not None: meta["name"] = name
+    if category is not None: meta["category"] = category
+    INSTRUMENTS[symbol] = meta
+    return meta
+
+
+def load_static_instrument_catalog():
+    from pathlib import Path
+
+    catalog_path = Path(__file__).resolve().parents[1] / "shared" / "instruments" / "catalog.json"
+    if not catalog_path.exists():
+        return
+
+    try:
+        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    if not isinstance(payload, list):
+        return
+
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        symbol = entry.get("symbol")
+        if not symbol:
+            continue
+        register_instrument(
+            symbol,
+            digits=entry.get("digits"),
+            point=entry.get("point"),
+            label=entry.get("label"),
+            name=entry.get("name"),
+            category=entry.get("category"),
+        )
+
+
+# Seed default instrument catalog so the API exposes richer metadata before MT5 connects
+load_static_instrument_catalog()
 
 # ======================================================================================
 # Bar aggregation

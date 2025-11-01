@@ -3,12 +3,18 @@ import { Activity, PauseCircle, PlayCircle } from 'lucide-react';
 import { ForexChart, Candle, PriceTarget } from './components/ForexChart';
 import { StrategySelector, Strategy } from './components/StrategySelector';
 import { SignalLogs, SignalLog } from './components/SignalLogs';
-import { InstrumentSelector, InstrumentOption } from './components/InstrumentSelector';
+import { InstrumentSelector } from './components/InstrumentSelector';
 import { PredictionPanel } from './components/PredictionPanel';
 import { Button } from './components/ui/button';
 import { Toaster } from './components/ui/sonner';
 import { toast as _toast } from 'sonner';
 import { apiGet, apiPost, WS_BASE_URL } from './lib/api';
+import {
+  FALLBACK_INSTRUMENT_DETAILS,
+  FALLBACK_INSTRUMENT_OPTIONS,
+  InstrumentOption,
+  formatSymbolLabel,
+} from './lib/instruments';
 
 // ---------------- Types ----------------
 type BackendSignal = {
@@ -89,28 +95,6 @@ const DEFAULT_STRATEGIES: Strategy[] = FALLBACK_STRATEGY_INFO.map(({ name, winRa
   enabled: false,
 }));
 
-// ---------------- Instruments fallback ----------------
-const FALLBACK_INSTRUMENT_DETAILS: Record<string, { label: string; name?: string }> = {
-  EURUSD: { label: 'EUR/USD', name: 'Euro / US Dollar' },
-  GBPUSD: { label: 'GBP/USD', name: 'British Pound / US Dollar' },
-  USDJPY: { label: 'USD/JPY', name: 'US Dollar / Japanese Yen' },
-  AUDUSD: { label: 'AUD/USD', name: 'Australian Dollar / US Dollar' },
-  USDCAD: { label: 'USD/CAD', name: 'US Dollar / Canadian Dollar' },
-  NZDUSD: { label: 'NZD/USD', name: 'New Zealand Dollar / US Dollar' },
-  EURGBP: { label: 'EUR/GBP', name: 'Euro / British Pound' },
-  EURJPY: { label: 'EUR/JPY', name: 'Euro / Japanese Yen' },
-};
-
-function formatSymbolLabel(symbol: string): string {
-  if (FALLBACK_INSTRUMENT_DETAILS[symbol]?.label) {
-    return FALLBACK_INSTRUMENT_DETAILS[symbol].label;
-  }
-  if (symbol.length === 6) {
-    return `${symbol.slice(0, 3)}/${symbol.slice(3)}`;
-  }
-  return symbol;
-}
-
 function mapSignal(signal: BackendSignal): SignalLog {
   const timestamp = signal.at * 1000;
   return {
@@ -141,6 +125,29 @@ function buildPriceTargets(signals: SignalLog[]): PriceTarget[] {
       { id: `${signal.id}-stop`, price: signal.stop, type: 'stop' as const, strategy: signal.strategy },
       { id: `${signal.id}-target`, price: signal.target, type: 'target' as const, strategy: signal.strategy },
     ]);
+}
+
+function safeCloseWebSocket(socket?: WebSocket | null) {
+  if (!socket) return;
+
+  const closeSocket = () => {
+    if (!socket || socket.readyState === WebSocket.CLOSED) return;
+    try {
+      socket.close();
+    } catch {
+      // ignore best-effort close errors
+    }
+  };
+
+  if (socket.readyState === WebSocket.CONNECTING) {
+    const abort = () => {
+      closeSocket();
+    };
+    socket.addEventListener('open', abort, { once: true });
+    socket.addEventListener('error', abort, { once: true });
+  } else {
+    closeSocket();
+  }
 }
 
 const TIMEFRAME_OPTIONS = [
@@ -353,6 +360,7 @@ export default function App() {
             value: symbol,
             label: formatSymbolLabel(symbol),
             name: FALLBACK_INSTRUMENT_DETAILS[symbol]?.name,
+            category: FALLBACK_INSTRUMENT_DETAILS[symbol]?.category,
           }))
           .sort((a, b) => a.label.localeCompare(b.label));
 
@@ -365,9 +373,7 @@ export default function App() {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           toast.error('Failed to load instruments', { description: message });
-          const fallbackOptions: InstrumentOption[] = Object.entries(FALLBACK_INSTRUMENT_DETAILS)
-            .map(([value, meta]) => ({ value, label: meta.label, name: meta.name }))
-            .sort((a, b) => a.label.localeCompare(b.label));
+          const fallbackOptions: InstrumentOption[] = FALLBACK_INSTRUMENT_OPTIONS;
           setInstrumentOptions((prev) => (prev.length ? prev : fallbackOptions));
           setSelectedInstrument((prev) => {
             const options = fallbackOptions.length ? fallbackOptions : instrumentOptions;
@@ -465,9 +471,18 @@ export default function App() {
     const connectBars = () => {
       const url = `${WS_BASE_URL}/ws/bars?symbol=${encodeURIComponent(selectedInstrument)}&res=${timeframe}`;
       barsWs = new WebSocket(url);
-      barsWs.onopen = () => play('connect');
-      barsWs.onclose = () => play('disconnect');
-      barsWs.onerror = () => play('disconnect');
+      barsWs.onopen = () => {
+        if (cancelled) return;
+        play('connect');
+      };
+      barsWs.onclose = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
+      barsWs.onerror = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
       barsWs.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -500,9 +515,18 @@ export default function App() {
     const connectTicks = () => {
       const url = `${WS_BASE_URL}/ws/ticks?symbol=${encodeURIComponent(selectedInstrument)}`;
       ticksWs = new WebSocket(url);
-      ticksWs.onopen = () => play('connect');
-      ticksWs.onclose = () => play('disconnect');
-      ticksWs.onerror = () => play('disconnect');
+      ticksWs.onopen = () => {
+        if (cancelled) return;
+        play('connect');
+      };
+      ticksWs.onclose = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
+      ticksWs.onerror = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
       ticksWs.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -524,8 +548,8 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      barsWs?.close();
-      ticksWs?.close();
+      safeCloseWebSocket(barsWs);
+      safeCloseWebSocket(ticksWs);
     };
   }, [selectedInstrument, timeframe, play]);
 
@@ -567,9 +591,18 @@ export default function App() {
 
     const connectSignals = () => {
       ws = new WebSocket(`${WS_BASE_URL}/ws/signals`);
-      ws.onopen = () => play('connect');
-      ws.onclose = () => play('disconnect');
-      ws.onerror = () => play('disconnect');
+      ws.onopen = () => {
+        if (cancelled) return;
+        play('connect');
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
+      ws.onerror = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -618,7 +651,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      ws?.close();
+      safeCloseWebSocket(ws);
     };
   }, [selectedInstrument, play]);
 
@@ -674,9 +707,18 @@ export default function App() {
 
     const connectPrediction = () => {
       ws = new WebSocket(`${WS_BASE_URL}/ws/prediction?symbol=${encodeURIComponent(selectedInstrument)}&tf=${timeframe}`);
-      ws.onopen = () => play('connect');
-      ws.onclose = () => play('disconnect');
-      ws.onerror = () => play('disconnect');
+      ws.onopen = () => {
+        if (cancelled) return;
+        play('connect');
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
+      ws.onerror = () => {
+        if (cancelled) return;
+        play('disconnect');
+      };
       ws.onmessage = (event) => {
         if (cancelled) return;
         try {
@@ -693,7 +735,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      ws?.close();
+      safeCloseWebSocket(ws);
     };
   }, [selectedInstrument, timeframe, play]);
 
